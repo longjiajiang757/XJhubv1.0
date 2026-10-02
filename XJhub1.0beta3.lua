@@ -1,6 +1,6 @@
 -- ============================================================
 -- XJ Hub 1.0 beta  |  作者: 嘉酱  |  图标: 嘉
--- 最小化 · 液态玻璃 · 反作弊 · 小简洁ESP · 动漫背景
+-- 修复最小化 · 液态玻璃 · 反作弊 · 大范围光环 · 动漫背景
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -23,7 +23,7 @@ inf("执行器: " .. ((identifyexecutor and identifyexecutor()) or "unknown"))
 local S = {
     stamina = false, food = false, noRagdoll = false, noFallDamage = false,
     infiniteAmmo = false, rapidFire = false, autoMoney = false,
-    auraEnabled = false, auraRange = 50, auraDamage = 5,
+    auraEnabled = false, auraRange = 200, auraDamage = 5,
     aimbot = {
         enabled = false, fov = 120, smoothness = 0.3, targetPart = "头部",
         wallCheck = false, friendCheck = false, teamCheck = false,
@@ -206,6 +206,7 @@ pcall(function()
     ok("防布娃娃 hook")
 end)
 
+-- ============== 杀戮光环（大范围） ==============
 local auraLast = 0
 RunSvc.Heartbeat:Connect(function()
     if not S.auraEnabled or not playerEvent then return end
@@ -235,7 +236,7 @@ RunSvc.Heartbeat:Connect(function()
         auraLast = tick()
     end
 end)
-ok("杀戮光环")
+ok("杀戮光环（范围 " .. S.auraRange .. "）")
 
 task.spawn(function()
     while true do
@@ -496,6 +497,9 @@ ok("ESP 小简洁版")
 -- UI 构建
 -- ============================================================
 local uiParent = (gethui and gethui()) or game:GetService("CoreGui")
+local oldGui = uiParent:FindFirstChild("XJHubUI")
+if oldGui then oldGui:Destroy() end
+
 local screen = Instance.new("ScreenGui")
 screen.Name = "XJHubUI"
 screen.ResetOnSpawn = false
@@ -503,7 +507,6 @@ screen.IgnoreGuiInset = true
 screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screen.Parent = uiParent
 
--- ============== 主窗口 ==============
 local main = Instance.new("Frame")
 main.Size = UDim2.new(0, 560, 0, 420)
 main.Position = UDim2.new(0.5, -280, 0.5, -210)
@@ -614,7 +617,6 @@ topbar.ZIndex = 2
 topbar.Parent = main
 Instance.new("UICorner", topbar).CornerRadius = UDim.new(0, 16)
 
--- 嘉 图标（渐变方块）
 local logo = Instance.new("Frame")
 logo.Size = UDim2.new(0, 40, 0, 40)
 logo.Position = UDim2.new(0, 12, 0.5, -20)
@@ -663,7 +665,6 @@ subtitle.TextXAlignment = Enum.TextXAlignment.Left
 subtitle.ZIndex = 3
 subtitle.Parent = topbar
 
--- 标题流光
 task.spawn(function()
     local hue = 0
     while screen.Parent do
@@ -672,6 +673,9 @@ task.spawn(function()
         task.wait(0.03)
     end
 end)
+
+-- ============== 关键修复：按钮区使用 blockDrag ==============
+local blockDrag = false
 
 -- 最小化按钮
 local minBtn = Instance.new("TextButton")
@@ -702,9 +706,32 @@ closeBtn.AutoButtonColor = false
 closeBtn.ZIndex = 3
 closeBtn.Parent = topbar
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
-closeBtn.MouseButton1Click:Connect(function() screen:Destroy() end)
 
--- ============== 悬浮小球（最小化后显示） ==============
+-- 按钮点击时阻止 topbar 拖动
+local function blockTopbarDrag(btn)
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            blockDrag = true
+        end
+    end)
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            blockDrag = false
+        end
+    end)
+    btn.MouseEnter:Connect(function()
+        Tween:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 0.2 }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        Tween:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 0 }):Play()
+    end)
+end
+blockTopbarDrag(minBtn)
+blockTopbarDrag(closeBtn)
+
+-- ============== 悬浮球 ==============
 local bubble = Instance.new("TextButton")
 bubble.Name = "XJ_Bubble"
 bubble.Size = UDim2.new(0, 52, 0, 52)
@@ -745,60 +772,75 @@ bubbleLbl.Font = Enum.Font.GothamBlack
 bubbleLbl.TextSize = 24
 bubbleLbl.ZIndex = 11
 
--- 悬浮球拖动
+-- ============== 悬浮球拖动 + 点击检测 ==============
 local bDragging, bDragStart, bStartPos = false, nil, nil
+local bHasMoved = false
+
 bubble.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         bDragging = true
         bDragStart = input.Position
         bStartPos = bubble.Position
+        bHasMoved = false
     end
 end)
 UIS.InputChanged:Connect(function(input)
     if bDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local d = input.Position - bDragStart
+        if math.abs(d.X) > 5 or math.abs(d.Y) > 5 then bHasMoved = true end
         bubble.Position = UDim2.new(bStartPos.X.Scale, bStartPos.X.Offset + d.X, bStartPos.Y.Scale, bStartPos.Y.Offset + d.Y)
     end
 end)
 UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    if bDragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
         bDragging = false
+        if not bHasMoved then
+            -- 手动触发恢复
+            if _G.__XJRestore then pcall(_G.__XJRestore) end
+        end
     end
 end)
 
 -- ============== 最小化 / 恢复 ==============
 local minimized = false
+local savedPos = nil
+
 local function minimize()
     if minimized then return end
     minimized = true
+    savedPos = main.Position
     Tween:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
         Size = UDim2.new(0, 100, 0, 80),
-        Position = UDim2.new(0.5, -50, 0.5, -40),
     }):Play()
     task.wait(0.25)
     main.Visible = false
     bubble.Visible = true
     inf("已最小化")
 end
+
 local function restore()
     if not minimized then return end
     minimized = false
     bubble.Visible = false
     main.Visible = true
+    if savedPos then main.Position = savedPos end
     main.Size = UDim2.new(0, 100, 0, 80)
     Tween:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
         Size = UDim2.new(0, 560, 0, 420),
     }):Play()
     inf("已恢复")
 end
-minBtn.MouseButton1Click:Connect(minimize)
-bubble.MouseButton1Click:Connect(function()
-    if not bDragging then restore() end
-end)
 
--- ============== 拖拽（带边界锁） ==============
+_G.__XJRestore = restore
+
+minBtn.MouseButton1Click:Connect(minimize)
+closeBtn.MouseButton1Click:Connect(function() screen:Destroy() end)
+ok("最小化 / 恢复 / 悬浮球")
+
+-- ============== 拖拽（带边界锁 + blockDrag）==============
 local dragging, dragStart, startPos = false, nil, nil
 topbar.InputBegan:Connect(function(input)
+    if blockDrag then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
@@ -810,7 +852,6 @@ UIS.InputChanged:Connect(function(input)
         local d = input.Position - dragStart
         local vp = WS.CurrentCamera and WS.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
         local mw = main.AbsoluteSize.X
-        local mh = main.AbsoluteSize.Y
         local newX = math.clamp(startPos.X.Offset + d.X, 100 - mw, vp.X - 100)
         local newY = math.clamp(startPos.Y.Offset + d.Y, 0, vp.Y - 40)
         main.Position = UDim2.new(0, newX, 0, newY)
@@ -821,7 +862,6 @@ UIS.InputEnded:Connect(function(input)
         dragging = false
     end
 end)
-ok("拖拽 + 最小化 + 悬浮球")
 
 -- ============== 左侧分类栏（液态玻璃滑块） ==============
 local sidebar = Instance.new("Frame")
@@ -833,14 +873,22 @@ sidebar.BorderSizePixel = 0
 sidebar.ZIndex = 2
 sidebar.Parent = main
 Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 10)
-local sbLayout = Instance.new("UIListLayout", sidebar)
+
+local innerNav = Instance.new("Frame")
+innerNav.Name = "XJ_InnerNav"
+innerNav.Size = UDim2.new(1, 0, 1, 0)
+innerNav.BackgroundTransparency = 1
+innerNav.BorderSizePixel = 0
+innerNav.ZIndex = 3
+innerNav.Parent = sidebar
+
+local sbLayout = Instance.new("UIListLayout", innerNav)
 sbLayout.Padding = UDim.new(0, 4)
 sbLayout.SortOrder = Enum.SortOrder.LayoutOrder
-local sbPad = Instance.new("UIPadding", sidebar)
+local sbPad = Instance.new("UIPadding", innerNav)
 sbPad.PaddingTop = UDim.new(0, 8); sbPad.PaddingBottom = UDim.new(0, 8)
 sbPad.PaddingLeft = UDim.new(0, 8); sbPad.PaddingRight = UDim.new(0, 8)
 
--- 液态玻璃滑块（跟随选中 tab 移动）
 local indicator = Instance.new("Frame")
 indicator.Name = "XJ_Indicator"
 indicator.Size = UDim2.new(1, -16, 0, 36)
@@ -876,7 +924,6 @@ Instance.new("UICorner", content).CornerRadius = UDim.new(0, 10)
 local pages = {}
 local currentTab = nil
 local tabButtons = {}
-local tabOrder = {}
 
 local function createPage(name)
     local page = Instance.new("ScrollingFrame")
@@ -908,7 +955,7 @@ local function createTab(name, order)
     btn.AutoButtonColor = false
     btn.LayoutOrder = order
     btn.ZIndex = 3
-    btn.Parent = sidebar
+    btn.Parent = innerNav
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -20, 1, 0)
@@ -923,18 +970,15 @@ local function createTab(name, order)
     lbl.Parent = btn
 
     tabButtons[name] = { btn = btn, lbl = lbl, order = order }
-    tabOrder[order] = name
 
     btn.MouseEnter:Connect(function()
         if currentTab ~= name then
             Tween:Create(btn, TweenInfo.new(0.15), { BackgroundTransparency = 0.75 }):Play()
-            Tween:Create(btn, TweenInfo.new(0.15), { Size = UDim2.new(1, 0, 0, 38) }):Play()
         end
     end)
     btn.MouseLeave:Connect(function()
         if currentTab ~= name then
             Tween:Create(btn, TweenInfo.new(0.15), { BackgroundTransparency = 1 }):Play()
-            Tween:Create(btn, TweenInfo.new(0.15), { Size = UDim2.new(1, 0, 0, 36) }):Play()
         end
     end)
     btn.MouseButton1Click:Connect(function()
@@ -942,7 +986,6 @@ local function createTab(name, order)
         for _, pg in pairs(pages) do pg.Visible = false end
         pages[name].Visible = true
         currentTab = name
-        -- 液态玻璃滑块滑动
         local targetY = 8 + (order - 1) * 40
         Tween:Create(indicator, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
             Position = UDim2.new(0, 8, 0, targetY),
@@ -1091,7 +1134,11 @@ local function createSlider(parent, name, min, max, def, cb)
         if dg and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then update(i.Position.X) end
     end)
     UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dg = false end
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch
+            or i.UserInputType == Enum.UserInputType.Focus then
+            dg = false
+        end
     end)
     return { set = function(v)
         val = math.clamp(v, min, max)
@@ -1165,7 +1212,7 @@ pages["主页"].Visible = true
 currentTab = "主页"
 tabButtons["主页"].lbl.TextColor3 = Color3.new(1, 1, 1)
 
--- ============== 主页信息卡 ==============
+-- 主页信息卡
 local function infoCard(parent, text, color)
     local f = Instance.new("Frame")
     f.Size = UDim2.new(1, 0, 0, 40)
@@ -1203,7 +1250,7 @@ createToggle(playerPage, "无限子弹", false, function(v) S.infiniteAmmo = v e
 createToggle(playerPage, "快速射击", false, function(v) S.rapidFire = v end)
 
 createToggle(combatPage, "杀戮光环", false, function(v) S.auraEnabled = v end)
-createSlider(combatPage, "光环范围", 10, 200, 50, function(v) S.auraRange = v end)
+createSlider(combatPage, "光环范围", 50, 800, 200, function(v) S.auraRange = v end)
 createSlider(combatPage, "光环伤害", 1, 100, 5, function(v) S.auraDamage = v end)
 
 createToggle(aimPage, "开启自瞄", false, function(v) S.aimbot.enabled = v end)
@@ -1232,6 +1279,6 @@ createToggle(autoPage, "自动捡钱", false, function(v) S.autoMoney = v end)
 ok("UI 构建完成")
 inf("=========================================")
 inf("XJ Hub 1.0 beta 加载完成")
-inf("点 － 最小化 → 出现「嘉」悬浮球 → 点球恢复")
-inf("分类切换有液态玻璃滑块动画")
+inf("最小化修复：点 － 或点悬浮球都能正常切换")
+inf("杀戮光环范围: 50 ~ 800（默认 200）")
 inf("=========================================")
