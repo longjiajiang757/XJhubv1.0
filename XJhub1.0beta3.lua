@@ -1,5 +1,5 @@
 -- ============================================================
--- XJ Hub 1.0 beta · 加载动画版
+-- XJ Hub 1.0 beta · 深度绕过 + UI 优化版
 -- 作者: 嘉酱
 -- ============================================================
 
@@ -23,104 +23,195 @@ local S = {
     infiniteAmmo = false, rapidFire = false,
     autoMoney = false, autoCuff = false, autoFarmer = false,
     auraEnabled = false, auraRange = 200, auraDamage = 5,
+    auraSilent = false,           -- 静默模式（降低频率）
+    auraHumanize = true,          -- 拟人化延迟
     flyEnabled = false, flySpeed = 50, flyMode = "传送",
     noclip = false, jumpPower = 100,
-    aimbot = {
-        enabled = false, fov = 120, smoothness = 0.3,
-        showFov = true, showTracer = false,
-        color = "红色", keyHeld = false, targetPart = "头部",
-    },
-    esp = {
-        enabled = false, name = true, distance = true, health = true,
-        team = true, highlight = true, bar = true,
-    },
+    aimbot = { enabled = false, fov = 120, smoothness = 0.3, showFov = true,
+               showTracer = false, color = "红色", keyHeld = false, targetPart = "头部" },
+    esp = { enabled = false, name = true, distance = true, health = true,
+            team = true, highlight = true, bar = true },
 }
 
--- ========== 环境自检 ==========
-local ENV = {
-    loadstring = type(loadstring) == "function",
-    getgc = type(getgc) == "function",
-    hookmetamethod = type(hookmetamethod) == "function",
-    newcclosure = type(newcclosure) == "function",
-    fireproximityprompt = type(fireproximityprompt) == "function",
-    Drawing = type(Drawing) == "table",
-    gethui = type(gethui) == "function",
-}
-local envScore = 0
-for k, v in pairs(ENV) do
-    if v then ok("环境: " .. k); envScore = envScore + 1
-    else no("缺失: " .. k) end
+-- ============================================================
+-- 深度绕过（客户端侧）
+-- ============================================================
+
+-- 【1】 环境指纹隐藏（防检测调试器扫描）
+pcall(function()
+    if type(debug) == "table" then
+        local function hookFn() return "C" end
+        if debug.info then debug.info = hookFn end
+        if debug.getinfo then debug.getinfo = hookFn end
+    end
+    ok("debug.info/getinfo 伪装")
+end)
+
+-- 【2】 AntiCheat 表替换（PY 原版）
+do
+    pcall(function()
+        local ac = RS:FindFirstChild("AntiCheat", true)
+        if ac and type(ac) == "table" then
+            for k, v in pairs(ac) do
+                if type(v) == "function" then
+                    ac[k] = function(...)
+                        local ok2, r = pcall(v, ...)
+                        if ok2 then return r end
+                        return true
+                    end
+                end
+            end
+            ok("AntiCheat 表替换")
+        end
+    end)
 end
-inf("环境通过: " .. envScore .. "/7")
 
--- ========== 反作弊绕过 ==========
+-- 【3】 Ratchet 补丁（PY 原版）
+do
+    pcall(function()
+        local Ratchet = require(RS:FindFirstChild("Ratchet", true))
+        local Sha256  = require(RS:FindFirstChild("Sha256", true))
+        local mt = getmetatable(Ratchet)
+        if mt and mt.__index and not mt.__index.__patched then
+            mt.__index.catchUp = function(self, target)
+                while self.index < target do self:advance() end
+                return true
+            end
+            mt.__index.respond = function(self, arg)
+                return Sha256("resp|" .. tostring(self.state) .. "|" .. tostring(self.index) .. "|" .. tostring(arg))
+            end
+            mt.__index.__patched = true
+            ok("Ratchet 补丁")
+        end
+    end)
+end
+
+-- 【4】 GetService 屏蔽
+if hookmetamethod and newcclosure then
+    local orig
+    orig = hookmetamethod(game, "__index", newcclosure(function(self, key)
+        if self == game and (key == "GetService" or key == "getService") then
+            return function(_, svc)
+                if svc == "InsertService" or svc == "Selection" or svc == "Stats"
+                    or svc == "ScriptContext" or svc == "VirtualInputManager" then
+                    return nil
+                end
+                return orig(self, svc)
+            end
+        end
+        return orig(self, key)
+    end))
+    ok("GetService 屏蔽扩展")
+end
+
+-- 【5】 namecall 拦截（PY 原版扩展）
 if hookmetamethod and newcclosure and getnamecallmethod then
     local orig
     orig = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local packed = table.pack(...)
         local method = getnamecallmethod()
+
         if method == "Kick" and self == LP then return end
+
         if method == "FireServer" and self.Name == "PlayerEvent" then
             local first = packed[1]
             if first == "char2" or first == "coreGame" or first == "vehicleTrack"
                 or first == "platform" or first == "messageDeliver" or first == "runOverVictim"
-                or first == "DEBUG2" or first == "chatCommand" or first == "controlsGuide" then
+                or first == "DEBUG2" or first == "chatCommand" or first == "controlsGuide"
+                or first == "reportExploiter" or first == "exploitReport" then
                 return
             end
             if S.noFallDamage and first == "takeDamage" then return nil end
         end
+
         if method == "InvokeServer" and self.Name == "PlayerFunc" then
             local first = packed[1]
             if first == "getPlayerData" or first == "getPlayerBanHistory"
                 or first == "getPlayerInGame" or first == "getPlayerServerEncounters"
-                or first == "getSecret" then
+                or first == "getSecret" or first == "checkExploit"
+                or first == "getClientInfo" or first == "logClientEvent" then
                 return true
             end
         end
+
         return orig(self, table.unpack(packed, 1, packed.n))
     end))
-    ok("远程拦截 + 防摔伤")
+    ok("namecall 深度拦截")
 end
 
-pcall(function()
-    local ac = RS:FindFirstChild("AntiCheat", true)
-    if ac and type(ac) == "table" then
-        for k, v in pairs(ac) do
-            if type(v) == "function" then
-                ac[k] = function(...)
-                    local ok2, r = pcall(v, ...)
-                    if ok2 then return r end
-                    return true
-                end
+-- 【6】 Ragdoll 补丁
+do
+    pcall(function()
+        local Ragdoll = require(RS.Modules.Ragdoll)
+        local act = Ragdoll.activate
+        local actSrv = Ragdoll.activateServer
+        Ragdoll.activate = function(self, cond, a, b, ...)
+            if S.noRagdoll and cond then return end
+            local p = table.pack(...)
+            p.n = 4 + p.n - 1
+            table.move(p, 1, p.n, 4, p)
+            p[1] = self; p[2] = cond; p[3] = a
+            return act(table.unpack(p, 1, p.n))
+        end
+        if actSrv then
+            Ragdoll.activateServer = function(self, cond, a, b, ...)
+                if S.noRagdoll and cond then return end
+                local p = table.pack(...)
+                p.n = 4 + p.n - 1
+                table.move(p, 1, p.n, 4, p)
+                p[1] = self; p[2] = cond; p[3] = a
+                return actSrv(table.unpack(p, 1, p.n))
             end
         end
-        ok("AntiCheat 包裹")
+        ok("Ragdoll 补丁")
+    end)
+end
+
+-- 【7】全局干扰屏蔽（屏蔽打印警告）
+pcall(function()
+    local oldWarn = warn
+    _G.warn = function(...)
+        local msg = tostring((...))
+        if msg:find("exploit") or msg:find("cheat") or msg:find("hack") then return end
+        oldWarn(...)
+    end
+    ok("warn 过滤")
+end)
+
+-- 【8】忽略客户端上报
+pcall(function()
+    local remote = RS:FindFirstChild("Remote", true)
+    if remote then
+        for _, c in ipairs(remote:GetChildren()) do
+            if c.Name:lower():find("report") or c.Name:lower():find("log") then
+                c:Destroy()
+            end
+        end
+        ok("上报远程清理")
     end
 end)
 
-pcall(function()
-    local Ratchet = require(RS:FindFirstChild("Ratchet", true))
-    local Sha256  = require(RS:FindFirstChild("Sha256", true))
-    local mt = getmetatable(Ratchet)
-    if mt and mt.__index and not mt.__index.__xj_patched then
-        mt.__index.catchUp = function(self, target)
-            while self.index < target do self:advance() end
-            return true
-        end
-        mt.__index.respond = function(self, arg)
-            return Sha256("resp|" .. tostring(self.state) .. "|" .. tostring(self.index) .. "|" .. tostring(arg))
-        end
-        mt.__index.__xj_patched = true
+-- ========== 环境自检 ==========
+local ENV_LIST = {
+    "loadstring", "getgc", "hookmetamethod", "newcclosure",
+    "fireproximityprompt", "Drawing", "gethui", "getrawmetatable", "setreadonly",
+}
+local envOk = 0
+for _, name in ipairs(ENV_LIST) do
+    if type(_G[name]) == "function" or type(_G[name]) == "table" then
+        ok("环境: " .. name); envOk = envOk + 1
+    else
+        no("缺失: " .. name)
     end
-    ok("Ratchet 补丁")
-end)
+end
+inf("环境通过: " .. envOk .. "/" .. #ENV_LIST)
 
 -- ========== 游戏框架 ==========
 local remote = RS:WaitForChild("Remote", 10)
 local playerEvent = remote and remote:WaitForChild("PlayerEvent", 10)
 local playerFunc  = remote and remote:WaitForChild("PlayerFunc", 10)
 if playerEvent then ok("PlayerEvent") end
-if playerFunc  then ok("PlayerFunc") end
+if playerFunc then ok("PlayerFunc") end
 
 local Core, Character, Controls
 pcall(function()
@@ -160,7 +251,7 @@ local TEAM_NAMES = {
 local function teamColor(p) return TEAM_COLORS[p.Team and p.Team.Name] or Color3.fromRGB(200, 200, 200) end
 local function teamLabel(p) return TEAM_NAMES[p.Team and p.Team.Name] or (p.Team and p.Team.Name or "无") end
 
--- ========== 核心循环 ==========
+-- ========== 核心循环（含拟人化延迟） ==========
 local coreTick, auraTick, rapidTick = 0, 0, 0
 RunSvc.Heartbeat:Connect(function()
     local now = tick()
@@ -171,12 +262,12 @@ RunSvc.Heartbeat:Connect(function()
             if S.food then pcall(function() Core.food = 100 end) end
         end
     end
-    if now - rapidTick > 1 and S.rapidFire and getgc then
+    if now - rapidTick > 2 and S.rapidFire and getgc then
         rapidTick = now
         for _, v in pairs(getgc(true)) do
             if type(v) == "table" then
                 if rawget(v, "SHOOT_MODE") ~= nil then rawset(v, "SHOOT_MODE", 2) end
-                if rawget(v, "RPM") ~= nil then rawset(v, "RPM", math.huge) end
+                if rawget(v, "RPM") ~= nil then rawset(v, "RPM", 800) end  -- 不再用 math.huge
             end
         end
     end
@@ -189,58 +280,48 @@ RunSvc.Heartbeat:Connect(function()
                 if cfg then
                     local a = cfg:FindFirstChild("Ammo")
                     local t = cfg:FindFirstChild("TotalAmmo")
-                    if a then a.Value = math.huge end
-                    if t then t.Value = math.huge end
+                    if a and a.Value < 900 then a.Value = 999 end
+                    if t and t.Value < 900 then t.Value = 999 end
                 end
             end
         end
     end
-    if S.auraEnabled and playerEvent and now - auraTick > 0.05 then
-        auraTick = now
-        local _, _, r = getChar()
-        if r then
-            local tgt, bd = nil, math.huge
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LP then
-                    local _, ph, pr = getChar(p)
-                    if ph and pr and ph.Health > 0 then
-                        local d = (pr.Position - r.Position).Magnitude
-                        if d <= S.auraRange and d < bd then tgt, bd = p, d end
+    -- 光环：加入拟人化延迟 + 静默模式
+    if S.auraEnabled and playerEvent then
+        local baseInterval = S.auraSilent and 0.25 or 0.08
+        local humanize = S.auraHumanize and (math.random(0, 4) / 100) or 0
+        if now - auraTick > baseInterval + humanize then
+            auraTick = now
+            local _, _, r = getChar()
+            if r then
+                local tgt, bd = nil, math.huge
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LP then
+                        local _, ph, pr = getChar(p)
+                        if ph and pr and ph.Health > 0 then
+                            local d = (pr.Position - r.Position).Magnitude
+                            if d <= S.auraRange and d < bd then tgt, bd = p, d end
+                        end
                     end
                 end
-            end
-            if tgt then
-                local _, _, pr = getChar(tgt)
-                pcall(function()
-                    playerEvent:FireServer("damage", {
-                        bodyParts = {{"Head", 1}},
-                        shotCode = { r.Position, (pr.Position - r.Position).Unit },
-                        pos = pr.Position, target = tgt,
-                        damageFactor = S.auraDamage, bulletProofTool = false,
-                    })
-                end)
+                if tgt then
+                    local _, _, pr = getChar(tgt)
+                    pcall(function()
+                        playerEvent:FireServer("damage", {
+                            bodyParts = {{"Head", 1}},
+                            shotCode = { r.Position, (pr.Position - r.Position).Unit },
+                            pos = pr.Position, target = tgt,
+                            damageFactor = S.auraDamage, bulletProofTool = false,
+                        })
+                    end)
+                end
             end
         end
     end
 end)
-ok("核心循环")
+ok("核心循环（拟人化延迟）")
 
-pcall(function()
-    local Ragdoll = require(RS.Modules.Ragdoll)
-    local a, b = Ragdoll.activate, Ragdoll.activateServer
-    Ragdoll.activate = function(self, cond, ...)
-        if S.noRagdoll and cond then return end
-        return a(self, cond, ...)
-    end
-    if b then
-        Ragdoll.activateServer = function(self, cond, ...)
-            if S.noRagdoll and cond then return end
-            return b(self, cond, ...)
-        end
-    end
-    ok("防布娃娃")
-end)
-
+-- 自动捡钱 / 农民
 task.spawn(function()
     while true do
         if S.autoMoney or S.autoFarmer then
@@ -269,11 +350,12 @@ task.spawn(function()
                 if best and fireproximityprompt then pcall(fireproximityprompt, best, 0) end
             end
         end
-        task.wait(0.6)
+        task.wait(0.8)
     end
 end)
 ok("自动捡钱 / 农民")
 
+-- 自动铐
 task.spawn(function()
     while true do
         if S.autoCuff and playerFunc then
@@ -289,22 +371,19 @@ task.spawn(function()
                 end
             end
         end
-        task.wait(0.5)
+        task.wait(0.6)
     end
 end)
 ok("自动铐")
 
--- ========== 飞车 ==========
+-- 飞车
 local FlyState = { flyConn = nil, bodyVel = nil, bodyGyro = nil, noclipConn = nil, cache = {} }
-
 local function stopFly()
     if FlyState.flyConn then FlyState.flyConn:Disconnect(); FlyState.flyConn = nil end
     if FlyState.bodyVel then FlyState.bodyVel:Destroy(); FlyState.bodyVel = nil end
     if FlyState.bodyGyro then FlyState.bodyGyro:Destroy(); FlyState.bodyGyro = nil end
-    local _, h = getChar()
-    if h then h.PlatformStand = false; h.AutoRotate = true end
+    local _, h = getChar(); if h then h.PlatformStand = false; h.AutoRotate = true end
 end
-
 local function startFly()
     stopFly()
     local _, h, r = getChar()
@@ -349,7 +428,6 @@ local function startFly()
         end)
     end
 end
-
 local function stopNoclip()
     if FlyState.noclipConn then FlyState.noclipConn:Disconnect(); FlyState.noclipConn = nil end
     for part, saved in pairs(FlyState.cache) do
@@ -357,7 +435,6 @@ local function stopNoclip()
     end
     FlyState.cache = {}
 end
-
 local function startNoclip()
     stopNoclip()
     FlyState.noclipConn = RunSvc.Stepped:Connect(function()
@@ -372,7 +449,6 @@ local function startNoclip()
         end
     end)
 end
-
 UIS.JumpRequest:Connect(function()
     local _, h, r = getChar()
     if not h or not r or h.Health <= 0 then return end
@@ -380,7 +456,7 @@ UIS.JumpRequest:Connect(function()
 end)
 ok("飞车")
 
--- ========== 自瞄 ==========
+-- 自瞄
 local PART_MAP = { ["头部"] = {"Head"}, ["胸部"] = {"UpperTorso", "Torso"} }
 local function getTargetPart(c)
     for _, n in ipairs(PART_MAP[S.aimbot.targetPart] or {"Head"}) do
@@ -398,11 +474,9 @@ local function aimColor()
     if S.aimbot.color == "彩虹" then return Color3.fromHSV(tick() % 5 / 5, 1, 1) end
     return COLOR_MAP[S.aimbot.color] or Color3.fromRGB(255, 0, 0)
 end
-
 local fovCircle = Drawing and Drawing.new("Circle")
 if fovCircle then fovCircle.Filled = false; fovCircle.NumSides = 48; fovCircle.Visible = false end
 local tracerLine = Drawing and Drawing.new("Line")
-
 RunSvc.RenderStepped:Connect(function(dt)
     local cam = WS.CurrentCamera
     if not cam then return end
@@ -441,7 +515,6 @@ RunSvc.RenderStepped:Connect(function(dt)
         cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, tgt.Position), S.aimbot.smoothness)
     elseif tracerLine then tracerLine.Visible = false end
 end)
-
 UIS.InputBegan:Connect(function(input, gpe)
     if gpe then return end
     if input.UserInputType == Enum.UserInputType.MouseButton2 then S.aimbot.keyHeld = true end
@@ -451,7 +524,7 @@ UIS.InputEnded:Connect(function(input)
 end)
 ok("自瞄")
 
--- ========== ESP ==========
+-- ESP
 local espParent = (gethui and gethui()) or game:GetService("CoreGui")
 local espFolder = Instance.new("Folder")
 espFolder.Name = "XJ_ESP"
@@ -467,16 +540,16 @@ local function buildESP(p, char, hrp)
     bill.MaxDistance = 1500
     bill.Adornee = hrp
     bill.Parent = espFolder
-    local line1 = Instance.new("TextLabel", bill)
-    line1.Size = UDim2.new(1, 0, 0, 14); line1.Position = UDim2.new(0, 0, 0, 0)
-    line1.BackgroundTransparency = 1; line1.Font = Enum.Font.GothamBold
-    line1.TextSize = 12; line1.TextColor3 = Color3.new(1,1,1)
-    line1.TextStrokeTransparency = 0; line1.TextStrokeColor3 = Color3.new(0,0,0)
-    local line2 = Instance.new("TextLabel", bill)
-    line2.Size = UDim2.new(1, 0, 0, 12); line2.Position = UDim2.new(0, 0, 0, 15)
-    line2.BackgroundTransparency = 1; line2.Font = Enum.Font.GothamBold
-    line2.TextSize = 10; line2.TextColor3 = Color3.fromRGB(230,230,230)
-    line2.TextStrokeTransparency = 0; line2.TextStrokeColor3 = Color3.new(0,0,0)
+    local l1 = Instance.new("TextLabel", bill)
+    l1.Size = UDim2.new(1, 0, 0, 14); l1.Position = UDim2.new(0, 0, 0, 0)
+    l1.BackgroundTransparency = 1; l1.Font = Enum.Font.GothamBold
+    l1.TextSize = 12; l1.TextColor3 = Color3.new(1,1,1)
+    l1.TextStrokeTransparency = 0; l1.TextStrokeColor3 = Color3.new(0,0,0)
+    local l2 = Instance.new("TextLabel", bill)
+    l2.Size = UDim2.new(1, 0, 0, 12); l2.Position = UDim2.new(0, 0, 0, 15)
+    l2.BackgroundTransparency = 1; l2.Font = Enum.Font.GothamBold
+    l2.TextSize = 10; l2.TextColor3 = Color3.fromRGB(230,230,230)
+    l2.TextStrokeTransparency = 0; l2.TextStrokeColor3 = Color3.new(0,0,0)
     local hpBg = Instance.new("Frame", bill)
     hpBg.Size = UDim2.new(1, -14, 0, 2); hpBg.Position = UDim2.new(0, 7, 1, -2)
     hpBg.BackgroundColor3 = Color3.fromRGB(20,20,30); hpBg.BackgroundTransparency = 0.2
@@ -490,7 +563,7 @@ local function buildESP(p, char, hrp)
     hl.Name = "XJ_HL"; hl.Adornee = char
     hl.FillTransparency = 0.85; hl.OutlineTransparency = 0
     pcall(function() hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
-    return { bill = bill, line1 = line1, line2 = line2, hpBg = hpBg, hpFill = hpFill, hl = hl }
+    return { bill = bill, line1 = l1, line2 = l2, hpBg = hpBg, hpFill = hpFill, hl = hl }
 end
 
 RunSvc.Heartbeat:Connect(function()
@@ -544,7 +617,7 @@ end)
 ok("ESP")
 
 -- ============================================================
--- UI 构建
+-- UI 构建（优化版）
 -- ============================================================
 local uiParent = (gethui and gethui()) or game:GetService("CoreGui")
 local oldGui = uiParent:FindFirstChild("XJHubUI")
@@ -557,63 +630,75 @@ screen.IgnoreGuiInset = true
 screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screen.Parent = uiParent
 
+-- 主窗口
 local main = Instance.new("Frame", screen)
-main.Size = UDim2.new(0, 520, 0, 380)
-main.Position = UDim2.new(0.5, -260, 0.5, -190)
-main.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+main.Size = UDim2.new(0, 540, 0, 400)
+main.Position = UDim2.new(0.5, -270, 0.5, -200)
+main.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
 main.BorderSizePixel = 0
 main.ClipsDescendants = true
-main.Visible = false  -- 加载完再显示
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
+main.Visible = false
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 16)
 
+-- 背景渐变（提升层次感）
+local mainBgGrad = Instance.new("UIGradient", main)
+mainBgGrad.Rotation = 135
+mainBgGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 16, 38)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(14, 14, 20)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 12, 32)),
+})
+
+-- 描边
 local mainStroke = Instance.new("UIStroke", main)
 mainStroke.Color = Color3.fromRGB(168, 85, 247)
-mainStroke.Thickness = 2.2
+mainStroke.Thickness = 2
 local strokeGrad = Instance.new("UIGradient", mainStroke)
 strokeGrad.Color = ColorSequence.new({
     ColorSequenceKeypoint.new(0, Color3.fromRGB(168, 85, 247)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(236, 72, 153)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(56, 189, 248)),
+    ColorSequenceKeypoint.new(0.33, Color3.fromRGB(236, 72, 153)),
+    ColorSequenceKeypoint.new(0.66, Color3.fromRGB(56, 189, 248)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(168, 85, 247)),
 })
 task.spawn(function()
     while screen.Parent do
         strokeGrad.Rotation = (strokeGrad.Rotation + 1.5) % 360
-        task.wait(0.04)
+        task.wait(0.05)
     end
 end)
 
 -- 标题栏
 local topbar = Instance.new("Frame", main)
-topbar.Size = UDim2.new(1, 0, 0, 52)
-topbar.BackgroundColor3 = Color3.fromRGB(24, 24, 34)
-topbar.BackgroundTransparency = 0.15
+topbar.Size = UDim2.new(1, 0, 0, 54)
+topbar.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+topbar.BackgroundTransparency = 0.2
 topbar.BorderSizePixel = 0
-Instance.new("UICorner", topbar).CornerRadius = UDim.new(0, 14)
+Instance.new("UICorner", topbar).CornerRadius = UDim.new(0, 16)
 
 local logo = Instance.new("Frame", topbar)
-logo.Size = UDim2.new(0, 36, 0, 36)
-logo.Position = UDim2.new(0, 10, 0.5, -18)
+logo.Size = UDim2.new(0, 38, 0, 38)
+logo.Position = UDim2.new(0, 10, 0.5, -19)
 logo.BackgroundColor3 = Color3.new(1,1,1)
 logo.BorderSizePixel = 0
-Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 9)
+Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 10)
 local lg = Instance.new("UIGradient", logo)
 lg.Rotation = 45
 lg.Color = ColorSequence.new(Color3.fromRGB(236,72,153), Color3.fromRGB(168,85,247))
 local lTxt = Instance.new("TextLabel", logo)
 lTxt.Size = UDim2.new(1,0,1,0); lTxt.BackgroundTransparency = 1
 lTxt.Text = "嘉"; lTxt.TextColor3 = Color3.new(1,1,1)
-lTxt.Font = Enum.Font.GothamBlack; lTxt.TextSize = 19
+lTxt.Font = Enum.Font.GothamBlack; lTxt.TextSize = 20
 
 local title = Instance.new("TextLabel", topbar)
-title.Size = UDim2.new(0, 300, 0, 20); title.Position = UDim2.new(0, 56, 0, 8)
+title.Size = UDim2.new(0, 300, 0, 20); title.Position = UDim2.new(0, 58, 0, 8)
 title.BackgroundTransparency = 1; title.Text = "XJ HUB 1.0 beta"
 title.TextColor3 = Color3.new(1,1,1); title.Font = Enum.Font.GothamBold
 title.TextSize = 16; title.TextXAlignment = Enum.TextXAlignment.Left
 
 local sub = Instance.new("TextLabel", topbar)
-sub.Size = UDim2.new(0, 300, 0, 14); sub.Position = UDim2.new(0, 56, 0, 28)
-sub.BackgroundTransparency = 1; sub.Text = "作者: 嘉酱"
-sub.TextColor3 = Color3.fromRGB(190, 190, 210); sub.Font = Enum.Font.Gotham
+sub.Size = UDim2.new(0, 300, 0, 14); sub.Position = UDim2.new(0, 58, 0, 30)
+sub.BackgroundTransparency = 1; sub.Text = "作者: 嘉酱 · 深度绕过版"
+sub.TextColor3 = Color3.fromRGB(200, 160, 255); sub.Font = Enum.Font.Gotham
 sub.TextSize = 11; sub.TextXAlignment = Enum.TextXAlignment.Left
 
 local statusDot = Instance.new("Frame", topbar)
@@ -623,24 +708,24 @@ statusDot.BackgroundColor3 = Color3.fromRGB(52, 219, 137)
 statusDot.BorderSizePixel = 0
 Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
 Tween:Create(statusDot, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-    BackgroundTransparency = 0.6,
+    BackgroundTransparency = 0.6
 }):Play()
 
 local blockDrag = false
 
 local minBtn = Instance.new("TextButton", topbar)
-minBtn.Size = UDim2.new(0, 28, 0, 28); minBtn.Position = UDim2.new(1, -70, 0.5, -14)
+minBtn.Size = UDim2.new(0, 30, 0, 30); minBtn.Position = UDim2.new(1, -76, 0.5, -15)
 minBtn.BackgroundColor3 = Color3.fromRGB(251, 191, 36); minBtn.Text = "－"
 minBtn.TextColor3 = Color3.new(1,1,1); minBtn.Font = Enum.Font.GothamBold
 minBtn.TextSize = 18; minBtn.BorderSizePixel = 0
-Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 7)
+Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 8)
 
 local closeBtn = Instance.new("TextButton", topbar)
-closeBtn.Size = UDim2.new(0, 28, 0, 28); closeBtn.Position = UDim2.new(1, -38, 0.5, -14)
+closeBtn.Size = UDim2.new(0, 30, 0, 30); closeBtn.Position = UDim2.new(1, -40, 0.5, -15)
 closeBtn.BackgroundColor3 = Color3.fromRGB(239, 68, 68); closeBtn.Text = "×"
 closeBtn.TextColor3 = Color3.new(1,1,1); closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextSize = 20; closeBtn.BorderSizePixel = 0
-Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 7)
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
 
 local function blockTopbarDrag(btn)
     btn.InputBegan:Connect(function(input)
@@ -653,33 +738,27 @@ local function blockTopbarDrag(btn)
             blockDrag = false
         end
     end)
-    btn.MouseEnter:Connect(function()
-        Tween:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 0.2 }):Play()
-    end)
-    btn.MouseLeave:Connect(function()
-        Tween:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 0 }):Play()
-    end)
 end
 blockTopbarDrag(minBtn)
 blockTopbarDrag(closeBtn)
 
 -- 悬浮球
 local bubble = Instance.new("TextButton", screen)
-bubble.Size = UDim2.new(0, 50, 0, 50)
-bubble.Position = UDim2.new(0, 20, 0.5, -25)
+bubble.Size = UDim2.new(0, 52, 0, 52)
+bubble.Position = UDim2.new(0, 20, 0.5, -26)
 bubble.BackgroundColor3 = Color3.new(1,1,1)
 bubble.Text = ""; bubble.BorderSizePixel = 0; bubble.Visible = false; bubble.ZIndex = 10
 Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
-local bg = Instance.new("UIGradient", bubble)
-bg.Rotation = 45
-bg.Color = ColorSequence.new({
+local bgGrad = Instance.new("UIGradient", bubble)
+bgGrad.Rotation = 45
+bgGrad.Color = ColorSequence.new({
     ColorSequenceKeypoint.new(0, Color3.fromRGB(236,72,153)),
     ColorSequenceKeypoint.new(0.5, Color3.fromRGB(168,85,247)),
     ColorSequenceKeypoint.new(1, Color3.fromRGB(56,189,248)),
 })
 task.spawn(function()
     while screen.Parent do
-        if bubble.Visible then bg.Rotation = (bg.Rotation + 2) % 360 end
+        if bubble.Visible then bgGrad.Rotation = (bgGrad.Rotation + 2) % 360 end
         task.wait(0.04)
     end
 end)
@@ -689,21 +768,6 @@ local bLbl = Instance.new("TextLabel", bubble)
 bLbl.Size = UDim2.new(1,0,1,0); bLbl.BackgroundTransparency = 1
 bLbl.Text = "嘉"; bLbl.TextColor3 = Color3.new(1,1,1)
 bLbl.Font = Enum.Font.GothamBlack; bLbl.TextSize = 24
-
-task.spawn(function()
-    while screen.Parent do
-        if bubble.Visible then
-            Tween:Create(bubble, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                Size = UDim2.new(0, 54, 0, 54)
-            }):Play()
-            task.wait(0.8)
-            Tween:Create(bubble, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                Size = UDim2.new(0, 50, 0, 50)
-            }):Play()
-            task.wait(0.8)
-        else task.wait(0.3) end
-    end
-end)
 
 local bDrag, bStart, bPos, bMoved = false, nil, nil, false
 bubble.InputBegan:Connect(function(input)
@@ -737,7 +801,7 @@ local function restore()
     main.Visible = true
     main.Size = UDim2.new(0, 100, 0, 80)
     Tween:Create(main, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 520, 0, 380)
+        Size = UDim2.new(0, 540, 0, 400)
     }):Play()
 end
 UIS.InputEnded:Connect(function(input)
@@ -773,25 +837,36 @@ UIS.InputEnded:Connect(function(input)
     end
 end)
 
--- 侧栏 + 液态滑块
+-- 侧栏（优化：卡片风格 + 液态滑块）
 local sidebar = Instance.new("Frame", main)
-sidebar.Size = UDim2.new(0, 112, 1, -66)
-sidebar.Position = UDim2.new(0, 8, 0, 58)
-sidebar.BackgroundColor3 = Color3.fromRGB(22,22,30)
-sidebar.BackgroundTransparency = 0.15
+sidebar.Size = UDim2.new(0, 116, 1, -70)
+sidebar.Position = UDim2.new(0, 8, 0, 60)
+sidebar.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+sidebar.BackgroundTransparency = 0.2
 sidebar.BorderSizePixel = 0
-Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 9)
+Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 10)
 
 local indicator = Instance.new("Frame", sidebar)
-indicator.Size = UDim2.new(1, -12, 0, 34)
+indicator.Size = UDim2.new(1, -12, 0, 36)
 indicator.Position = UDim2.new(0, 6, 0, 6)
 indicator.BackgroundColor3 = Color3.new(1,1,1)
-indicator.BackgroundTransparency = 0.82
+indicator.BackgroundTransparency = 0.85
 indicator.BorderSizePixel = 0
 indicator.ZIndex = 2
-Instance.new("UICorner", indicator).CornerRadius = UDim.new(0, 7)
+Instance.new("UICorner", indicator).CornerRadius = UDim.new(0, 8)
 local indStroke = Instance.new("UIStroke", indicator)
-indStroke.Color = Color3.new(1,1,1); indStroke.Thickness = 1; indStroke.Transparency = 0.5
+indStroke.Color = Color3.fromRGB(190, 130, 255); indStroke.Thickness = 1; indStroke.Transparency = 0.4
+local indGrad = Instance.new("UIGradient", indicator)
+indGrad.Rotation = 90
+indGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(168, 85, 247)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(236, 72, 153)),
+})
+indGrad.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.7),
+    NumberSequenceKeypoint.new(0.5, 0.95),
+    NumberSequenceKeypoint.new(1, 0.7),
+})
 
 local innerNav = Instance.new("ScrollingFrame", sidebar)
 innerNav.Size = UDim2.new(1,0,1,0)
@@ -807,12 +882,12 @@ np.PaddingTop = UDim.new(0, 6); np.PaddingBottom = UDim.new(0, 6)
 np.PaddingLeft = UDim.new(0, 6); np.PaddingRight = UDim.new(0, 6)
 
 local content = Instance.new("Frame", main)
-content.Size = UDim2.new(1, -128, 1, -66)
-content.Position = UDim2.new(0, 120, 0, 58)
-content.BackgroundColor3 = Color3.fromRGB(20,20,28)
-content.BackgroundTransparency = 0.15
+content.Size = UDim2.new(1, -132, 1, -70)
+content.Position = UDim2.new(0, 124, 0, 60)
+content.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+content.BackgroundTransparency = 0.2
 content.BorderSizePixel = 0
-Instance.new("UICorner", content).CornerRadius = UDim.new(0, 9)
+Instance.new("UICorner", content).CornerRadius = UDim.new(0, 10)
 
 local pages, tabButtons = {}, {}
 local currentTab
@@ -838,24 +913,24 @@ local function createTab(name, icon)
     tabCount = tabCount + 1
     local order = tabCount
     local btn = Instance.new("TextButton", innerNav)
-    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.Size = UDim2.new(1, 0, 0, 36)
     btn.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
     btn.BackgroundTransparency = 1
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.LayoutOrder = order
     btn.ZIndex = 3
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
     local ico = Instance.new("TextLabel", btn)
-    ico.Size = UDim2.new(0, 20, 1, 0); ico.Position = UDim2.new(0, 8, 0, 0)
+    ico.Size = UDim2.new(0, 20, 1, 0); ico.Position = UDim2.new(0, 10, 0, 0)
     ico.BackgroundTransparency = 1; ico.Text = icon or ""
-    ico.TextColor3 = Color3.fromRGB(185,185,205)
-    ico.Font = Enum.Font.GothamBold; ico.TextSize = 13
+    ico.TextColor3 = Color3.fromRGB(190, 190, 210)
+    ico.Font = Enum.Font.GothamBold; ico.TextSize = 14
     ico.TextXAlignment = Enum.TextXAlignment.Center
     ico.ZIndex = 4
     local lbl = Instance.new("TextLabel", btn)
-    lbl.Size = UDim2.new(1, -32, 1, 0); lbl.Position = UDim2.new(0, 30, 0, 0)
+    lbl.Size = UDim2.new(1, -34, 1, 0); lbl.Position = UDim2.new(0, 34, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = name
-    lbl.TextColor3 = Color3.fromRGB(185,185,205)
+    lbl.TextColor3 = Color3.fromRGB(190, 190, 210)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 13
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.ZIndex = 4
@@ -864,7 +939,7 @@ local function createTab(name, icon)
 
     btn.MouseEnter:Connect(function()
         if currentTab ~= name then
-            Tween:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 0.75 }):Play()
+            Tween:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 0.7 }):Play()
         end
     end)
     btn.MouseLeave:Connect(function()
@@ -877,12 +952,12 @@ local function createTab(name, icon)
         for _, pg in pairs(pages) do pg.Visible = false end
         pages[name].Visible = true
         currentTab = name
-        local targetY = 6 + (order - 1) * 38
+        local targetY = 6 + (order - 1) * 40
         Tween:Create(indicator, TweenInfo.new(0.26, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
             Position = UDim2.new(0, 6, 0, targetY)
         }):Play()
         for n, t in pairs(tabButtons) do
-            local c = n == name and Color3.new(1,1,1) or Color3.fromRGB(185,185,205)
+            local c = n == name and Color3.new(1,1,1) or Color3.fromRGB(190, 190, 210)
             t.lbl.TextColor3 = c
             t.ico.TextColor3 = c
         end
@@ -890,15 +965,15 @@ local function createTab(name, icon)
     return btn
 end
 
--- 控件
+-- 控件（优化版：更加圆润细腻）
 local function createToggle(parent, name, def, cb)
     local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, 0, 0, 40)
-    btn.BackgroundColor3 = Color3.fromRGB(30,30,42)
+    btn.Size = UDim2.new(1, 0, 0, 42)
+    btn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
     btn.BackgroundTransparency = 0.1
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -70, 1, 0); lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = name
@@ -906,22 +981,22 @@ local function createToggle(parent, name, def, cb)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 13
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     local ind = Instance.new("Frame", btn)
-    ind.Size = UDim2.new(0, 42, 0, 22)
-    ind.Position = UDim2.new(1, -54, 0.5, -11)
-    ind.BackgroundColor3 = Color3.fromRGB(55,55,70)
+    ind.Size = UDim2.new(0, 44, 0, 24)
+    ind.Position = UDim2.new(1, -56, 0.5, -12)
+    ind.BackgroundColor3 = Color3.fromRGB(50,50,65)
     ind.BorderSizePixel = 0
     Instance.new("UICorner", ind).CornerRadius = UDim.new(1, 0)
     local knob = Instance.new("Frame", ind)
-    knob.Size = UDim2.new(0, 18, 0, 18)
-    knob.Position = UDim2.new(0, 2, 0.5, -9)
+    knob.Size = UDim2.new(0, 20, 0, 20)
+    knob.Position = UDim2.new(0, 2, 0.5, -10)
     knob.BackgroundColor3 = Color3.new(1,1,1)
     knob.BorderSizePixel = 0
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
     local glow = Instance.new("Frame", ind)
-    glow.Size = UDim2.new(1, 8, 1, 8)
-    glow.Position = UDim2.new(0, -4, 0, -4)
+    glow.Size = UDim2.new(1, 10, 1, 10)
+    glow.Position = UDim2.new(0, -5, 0, -5)
     glow.BackgroundColor3 = Color3.fromRGB(190, 80, 255)
-    glow.BackgroundTransparency = 0.7
+    glow.BackgroundTransparency = 0.6
     glow.BorderSizePixel = 0
     glow.Visible = false
     glow.ZIndex = 0
@@ -929,19 +1004,16 @@ local function createToggle(parent, name, def, cb)
     local state = def or false
     local function refresh()
         Tween:Create(knob, TweenInfo.new(0.15), {
-            Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
+            Position = state and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10)
         }):Play()
         Tween:Create(ind, TweenInfo.new(0.15), {
-            BackgroundColor3 = state and Color3.fromRGB(190, 80, 255) or Color3.fromRGB(55, 55, 70)
+            BackgroundColor3 = state and Color3.fromRGB(190, 80, 255) or Color3.fromRGB(50, 50, 65)
         }):Play()
         glow.Visible = state
         if state then
             if not ind:FindFirstChildOfClass("UIGradient") then
                 local g = Instance.new("UIGradient", ind)
-                g.Color = ColorSequence.new({
-                    ColorSequenceKeypoint.new(0, Color3.fromRGB(168, 85, 247)),
-                    ColorSequenceKeypoint.new(1, Color3.fromRGB(236, 72, 153)),
-                })
+                g.Color = ColorSequence.new(Color3.fromRGB(168, 85, 247), Color3.fromRGB(236, 72, 153))
             end
         else
             local g = ind:FindFirstChildOfClass("UIGradient")
@@ -957,11 +1029,11 @@ end
 
 local function createSlider(parent, name, min, max, def, cb)
     local frame = Instance.new("Frame", parent)
-    frame.Size = UDim2.new(1, 0, 0, 58)
-    frame.BackgroundColor3 = Color3.fromRGB(30,30,42)
+    frame.Size = UDim2.new(1, 0, 0, 60)
+    frame.BackgroundColor3 = Color3.fromRGB(28,28,40)
     frame.BackgroundTransparency = 0.1
     frame.BorderSizePixel = 0
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 7)
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
     local lbl = Instance.new("TextLabel", frame)
     lbl.Size = UDim2.new(1, -70, 0, 18); lbl.Position = UDim2.new(0, 14, 0, 6)
     lbl.BackgroundTransparency = 1; lbl.Text = name
@@ -975,8 +1047,8 @@ local function createSlider(parent, name, min, max, def, cb)
     vLbl.Font = Enum.Font.GothamBold; vLbl.TextSize = 14
     vLbl.TextXAlignment = Enum.TextXAlignment.Right
     local track = Instance.new("TextButton", frame)
-    track.Size = UDim2.new(1, -28, 0, 8); track.Position = UDim2.new(0, 14, 0, 34)
-    track.BackgroundColor3 = Color3.fromRGB(55,55,70)
+    track.Size = UDim2.new(1, -28, 0, 8); track.Position = UDim2.new(0, 14, 0, 36)
+    track.BackgroundColor3 = Color3.fromRGB(50,50,65)
     track.Text = ""; track.BorderSizePixel = 0
     track.AutoButtonColor = false
     Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
@@ -985,9 +1057,11 @@ local function createSlider(parent, name, min, max, def, cb)
     fill.BackgroundColor3 = Color3.fromRGB(168,85,247)
     fill.BorderSizePixel = 0
     Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+    local fillGrad = Instance.new("UIGradient", fill)
+    fillGrad.Color = ColorSequence.new(Color3.fromRGB(168, 85, 247), Color3.fromRGB(236, 72, 153))
     local dot = Instance.new("Frame", track)
-    dot.Size = UDim2.new(0, 14, 0, 14)
-    dot.Position = UDim2.new((def - min) / (max - min), -7, 0.5, -7)
+    dot.Size = UDim2.new(0, 16, 0, 16)
+    dot.Position = UDim2.new((def - min) / (max - min), -8, 0.5, -8)
     dot.BackgroundColor3 = Color3.new(1,1,1)
     dot.BorderSizePixel = 0
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
@@ -998,7 +1072,7 @@ local function createSlider(parent, name, min, max, def, cb)
         local pos = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
         local v = math.floor(min + pos * (max - min) + 0.5)
         fill.Size = UDim2.new(pos, 0, 1, 0)
-        dot.Position = UDim2.new(pos, -7, 0.5, -7)
+        dot.Position = UDim2.new(pos, -8, 0.5, -8)
         vLbl.Text = tostring(v)
         if cb then pcall(cb, v) end
     end
@@ -1017,12 +1091,12 @@ end
 
 local function createDropdown(parent, name, options, defIdx, cb)
     local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, 0, 0, 40)
-    btn.BackgroundColor3 = Color3.fromRGB(30,30,42)
+    btn.Size = UDim2.new(1, 0, 0, 42)
+    btn.BackgroundColor3 = Color3.fromRGB(28,28,40)
     btn.BackgroundTransparency = 0.1
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -130, 1, 0); lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = name
@@ -1076,6 +1150,8 @@ createToggle(pPlayer, "自动捡钱", false, function(v) S.autoMoney = v end)
 createToggle(pPlayer, "自动农民", false, function(v) S.autoFarmer = v end)
 
 createToggle(pCombat, "杀戮光环", false, function(v) S.auraEnabled = v end)
+createToggle(pCombat, "拟人化延迟", true, function(v) S.auraHumanize = v end)
+createToggle(pCombat, "静默模式", false, function(v) S.auraSilent = v end)
 createSlider(pCombat, "光环范围", 50, 800, 200, function(v) S.auraRange = v end)
 createSlider(pCombat, "光环伤害", 1, 100, 5, function(v) S.auraDamage = v end)
 createToggle(pCombat, "自动铐", false, function(v) S.autoCuff = v end)
@@ -1085,7 +1161,7 @@ createToggle(pAim, "显示 FOV 圈", true, function(v) S.aimbot.showFov = v end)
 createToggle(pAim, "显示追踪线", false, function(v) S.aimbot.showTracer = v end)
 createDropdown(pAim, "FOV 颜色", {"红色", "绿色", "蓝色", "紫色", "白色"}, 1, function(v) S.aimbot.color = v end)
 createSlider(pAim, "FOV 大小", 20, 400, 120, function(v) S.aimbot.fov = v end)
-createSlider(pAim, "平滑度（越大越快）", 1, 10, 3, function(v) S.aimbot.smoothness = v / 10 end)
+createSlider(pAim, "平滑度", 1, 10, 3, function(v) S.aimbot.smoothness = v / 10 end)
 
 createToggle(pEsp, "开启透视", false, function(v) S.esp.enabled = v end)
 createToggle(pEsp, "显示名字", true, function(v) S.esp.name = v end)
@@ -1118,9 +1194,9 @@ createSlider(pCar, "跳跃高度", 50, 400, 100, function(v) S.jumpPower = v end
 ok("UI 构建完成")
 
 -- ============================================================
--- 加载动画
+-- 加载动画（居中单卡片）
 -- ============================================================
-inf("播放加载动画")
+inf("播放居中加载动画")
 
 local loading = Instance.new("Frame", screen)
 loading.Size = UDim2.new(1, 0, 1, 0)
@@ -1129,189 +1205,161 @@ loading.BackgroundTransparency = 0
 loading.BorderSizePixel = 0
 loading.ZIndex = 100
 
--- 背景渐变
-local lgrad = Instance.new("UIGradient", loading)
-lgrad.Rotation = 135
-lgrad.Color = ColorSequence.new({
+local lBg = Instance.new("UIGradient", loading)
+lBg.Rotation = 135
+lBg.Color = ColorSequence.new({
     ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 8, 35)),
     ColorSequenceKeypoint.new(0.5, Color3.fromRGB(8, 8, 14)),
     ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 8, 30)),
 })
 
--- 旋转光环
-local ringContainer = Instance.new("Frame", loading)
-ringContainer.Size = UDim2.new(0, 160, 0, 160)
-ringContainer.Position = UDim2.new(0.5, -80, 0.5, -140)
-ringContainer.BackgroundTransparency = 1
-ringContainer.ZIndex = 101
+local lCard = Instance.new("Frame", loading)
+lCard.Size = UDim2.new(0, 340, 0, 200)
+lCard.Position = UDim2.new(0.5, -170, 0.5, -100)
+lCard.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
+lCard.BackgroundTransparency = 0.1
+lCard.BorderSizePixel = 0
+lCard.ZIndex = 101
+Instance.new("UICorner", lCard).CornerRadius = UDim.new(0, 16)
 
-local ring = Instance.new("Frame", ringContainer)
-ring.Size = UDim2.new(1, 0, 1, 0)
-ring.BackgroundTransparency = 1
-ring.ZIndex = 101
+local lCardStroke = Instance.new("UIStroke", lCard)
+lCardStroke.Color = Color3.fromRGB(168, 85, 247)
+lCardStroke.Thickness = 2
+local lCardGrad = Instance.new("UIGradient", lCardStroke)
+lCardGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(168, 85, 247)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(236, 72, 153)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(56, 189, 248)),
+})
+task.spawn(function()
+    while screen.Parent do
+        lCardGrad.Rotation = (lCardGrad.Rotation + 2) % 360
+        task.wait(0.05)
+    end
+end)
 
--- 用 4 个小弧段拼成一个旋转的环
-local ringSegments = {}
-for i = 1, 4 do
-    local seg = Instance.new("Frame", ring)
-    seg.Size = UDim2.new(0, 12, 0, 12)
-    seg.BackgroundColor3 = Color3.fromRGB(190, 80, 255)
-    seg.BorderSizePixel = 0
-    seg.ZIndex = 102
-    Instance.new("UICorner", seg).CornerRadius = UDim.new(1, 0)
-    ringSegments[i] = seg
-end
-
--- Logo 方块
-local lLogo = Instance.new("Frame", loading)
+local lLogo = Instance.new("Frame", lCard)
 lLogo.Size = UDim2.new(0, 0, 0, 0)
-lLogo.Position = UDim2.new(0.5, 0, 0.5, -140)
-lLogo.AnchorPoint = Vector2.new(0.5, 0.5)
+lLogo.Position = UDim2.new(0.5, -35, 0, 18)
 lLogo.BackgroundColor3 = Color3.new(1,1,1)
 lLogo.BorderSizePixel = 0
-lLogo.ZIndex = 103
-Instance.new("UICorner", lLogo).CornerRadius = UDim.new(0, 20)
+lLogo.ZIndex = 102
+Instance.new("UICorner", lLogo).CornerRadius = UDim.new(0, 14)
 local lLogoGrad = Instance.new("UIGradient", lLogo)
 lLogoGrad.Rotation = 45
 lLogoGrad.Color = ColorSequence.new(Color3.fromRGB(236,72,153), Color3.fromRGB(168,85,247))
-local lLogoStroke = Instance.new("UIStroke", lLogo)
-lLogoStroke.Color = Color3.new(1,1,1); lLogoStroke.Thickness = 2; lLogoStroke.Transparency = 0.4
 local lLogoTxt = Instance.new("TextLabel", lLogo)
 lLogoTxt.Size = UDim2.new(1,0,1,0); lLogoTxt.BackgroundTransparency = 1
 lLogoTxt.Text = "嘉"; lLogoTxt.TextColor3 = Color3.new(1,1,1)
-lLogoTxt.Font = Enum.Font.GothamBlack; lLogoTxt.TextSize = 48
+lLogoTxt.Font = Enum.Font.GothamBlack; lLogoTxt.TextSize = 36
+lLogoTxt.ZIndex = 103
 
--- 标题
-local lTitle = Instance.new("TextLabel", loading)
-lTitle.Size = UDim2.new(0, 400, 0, 30)
-lTitle.Position = UDim2.new(0.5, -200, 0.5, 20)
+local lTitle = Instance.new("TextLabel", lCard)
+lTitle.Size = UDim2.new(1, 0, 0, 22)
+lTitle.Position = UDim2.new(0, 0, 0, 86)
 lTitle.BackgroundTransparency = 1
-lTitle.Text = "XJ HUB"
+lTitle.Text = "XJ HUB 1.0 beta"
 lTitle.TextColor3 = Color3.new(1,1,1)
-lTitle.Font = Enum.Font.GothamBlack
-lTitle.TextSize = 28
-lTitle.TextStrokeTransparency = 0.5
-lTitle.TextStrokeColor3 = Color3.fromRGB(168, 85, 247)
+lTitle.Font = Enum.Font.GothamBold
+lTitle.TextSize = 17
+lTitle.ZIndex = 102
 
-local lVer = Instance.new("TextLabel", loading)
-lVer.Size = UDim2.new(0, 400, 0, 18)
-lVer.Position = UDim2.new(0.5, -200, 0.5, 52)
-lVer.BackgroundTransparency = 1
-lVer.Text = "v1.0 beta · 作者: 嘉酱"
-lVer.TextColor3 = Color3.fromRGB(180, 180, 200)
-lVer.Font = Enum.Font.Gotham
-lVer.TextSize = 12
+local lSub = Instance.new("TextLabel", lCard)
+lSub.Size = UDim2.new(1, 0, 0, 14)
+lSub.Position = UDim2.new(0, 0, 0, 108)
+lSub.BackgroundTransparency = 1
+lSub.Text = "作者: 嘉酱"
+lSub.TextColor3 = Color3.fromRGB(190, 190, 210)
+lSub.Font = Enum.Font.Gotham
+lSub.TextSize = 11
+lSub.ZIndex = 102
 
--- 进度条背景
-local barBg = Instance.new("Frame", loading)
-barBg.Size = UDim2.new(0, 260, 0, 4)
-barBg.Position = UDim2.new(0.5, -130, 0.5, 100)
-barBg.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-barBg.BorderSizePixel = 0
-Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+local lBarBg = Instance.new("Frame", lCard)
+lBarBg.Size = UDim2.new(1, -60, 0, 4)
+lBarBg.Position = UDim2.new(0, 30, 0, 138)
+lBarBg.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+lBarBg.BorderSizePixel = 0
+lBarBg.ZIndex = 102
+Instance.new("UICorner", lBarBg).CornerRadius = UDim.new(1, 0)
 
-local barFill = Instance.new("Frame", barBg)
-barFill.Size = UDim2.new(0, 0, 1, 0)
-barFill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
-barFill.BorderSizePixel = 0
-Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
-local barGrad = Instance.new("UIGradient", barFill)
-barGrad.Color = ColorSequence.new({
+local lBarFill = Instance.new("Frame", lBarBg)
+lBarFill.Size = UDim2.new(0, 0, 1, 0)
+lBarFill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
+lBarFill.BorderSizePixel = 0
+lBarFill.ZIndex = 103
+Instance.new("UICorner", lBarFill).CornerRadius = UDim.new(1, 0)
+local lBarGrad = Instance.new("UIGradient", lBarFill)
+lBarGrad.Color = ColorSequence.new({
     ColorSequenceKeypoint.new(0, Color3.fromRGB(236, 72, 153)),
     ColorSequenceKeypoint.new(1, Color3.fromRGB(56, 189, 248)),
 })
 
--- 加载文字
-local lText = Instance.new("TextLabel", loading)
-lText.Size = UDim2.new(0, 400, 0, 20)
-lText.Position = UDim2.new(0.5, -200, 0.5, 120)
-lText.BackgroundTransparency = 1
-lText.Text = "初始化..."
-lText.TextColor3 = Color3.fromRGB(200, 200, 220)
-lText.Font = Enum.Font.GothamMedium
-lText.TextSize = 13
+local lStatus = Instance.new("TextLabel", lCard)
+lStatus.Size = UDim2.new(1, -60, 0, 16)
+lStatus.Position = UDim2.new(0, 30, 0, 156)
+lStatus.BackgroundTransparency = 1
+lStatus.Text = "初始化..."
+lStatus.TextColor3 = Color3.fromRGB(200, 200, 220)
+lStatus.Font = Enum.Font.GothamMedium
+lStatus.TextSize = 12
+lStatus.TextXAlignment = Enum.TextXAlignment.Left
+lStatus.ZIndex = 102
 
--- 步骤文字
+local lPct = Instance.new("TextLabel", lCard)
+lPct.Size = UDim2.new(1, -60, 0, 16)
+lPct.Position = UDim2.new(0, 30, 0, 156)
+lPct.BackgroundTransparency = 1
+lPct.Text = "0%"
+lPct.TextColor3 = Color3.fromRGB(190, 130, 255)
+lPct.Font = Enum.Font.GothamBold
+lPct.TextSize = 12
+lPct.TextXAlignment = Enum.TextXAlignment.Right
+lPct.ZIndex = 102
+
 local steps = {
-    { text = "初始化运行环境...",         progress = 0.2 },
-    { text = "注入反作弊绕过...",         progress = 0.4 },
-    { text = "加载核心模块...",           progress = 0.6 },
-    { text = "构建 UI 界面...",           progress = 0.8 },
-    { text = "准备就绪 ✨",                progress = 1.0 },
+    { text = "初始化运行环境", pct = 20 },
+    { text = "注入绕过保护", pct = 40 },
+    { text = "加载核心模块", pct = 60 },
+    { text = "构建 UI 界面", pct = 80 },
+    { text = "准备就绪", pct = 100 },
 }
 
--- 播放动画
 task.spawn(function()
-    -- 1. Logo 从 0 放大到 90
     lLogo.Size = UDim2.new(0, 0, 0, 0)
-    Tween:Create(lLogo, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 90, 0, 90)
+    Tween:Create(lLogo, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Size = UDim2.new(0, 70, 0, 70)
     }):Play()
-    task.wait(0.5)
+    task.wait(0.45)
 
-    -- 2. 光环旋转
-    local angle = 0
-    local ringSpinConn = RunSvc.RenderStepped:Connect(function()
-        angle = (angle + 2) % 360
-        for i, seg in ipairs(ringSegments) do
-            local a = math.rad(angle + (i - 1) * 90)
-            local r = 70
-            local x = 80 + math.cos(a) * r - 6
-            local y = 80 + math.sin(a) * r - 6
-            seg.Position = UDim2.new(0, x, 0, y)
-            -- 颜色渐变
-            local t = (i - 1) / 4
-            seg.BackgroundColor3 = Color3.fromHSV((angle / 360 + t) % 1, 0.7, 1)
-        end
-    end)
-
-    -- 3. 进度条推进 + 文字切换
     for _, s in ipairs(steps) do
-        lText.Text = s.text
-        Tween:Create(barFill, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.new(s.progress, 0, 1, 0)
+        lStatus.Text = s.text
+        lPct.Text = s.pct .. "%"
+        Tween:Create(lBarFill, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Size = UDim2.new(s.pct / 100, 0, 1, 0)
         }):Play()
-        -- Logo 轻微脉动
-        Tween:Create(lLogo, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.new(0, 96, 0, 96)
-        }):Play()
-        task.wait(0.18)
-        Tween:Create(lLogo, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.new(0, 90, 0, 90)
-        }):Play()
-        task.wait(0.35)
+        task.wait(0.32)
     end
 
-    task.wait(0.3)
+    task.wait(0.25)
 
-    -- 4. 光环停止、Logo 缩小
-    ringSpinConn:Disconnect()
-    Tween:Create(lLogo, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
-        Size = UDim2.new(0, 0, 0, 0)
-    }):Play()
-
-    -- 5. 整个遮罩渐隐
-    Tween:Create(loading, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+    Tween:Create(loading, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
         BackgroundTransparency = 1
     }):Play()
-    for _, d in ipairs(loading:GetDescendants()) do
+    Tween:Create(lCard, TweenInfo.new(0.35), { BackgroundTransparency = 1 }):Play()
+    Tween:Create(lCardStroke, TweenInfo.new(0.35), { Transparency = 1 }):Play()
+    for _, d in ipairs(lCard:GetDescendants()) do
         if d:IsA("TextLabel") then
             Tween:Create(d, TweenInfo.new(0.3), { TextTransparency = 1 }):Play()
-        elseif d:IsA("Frame") and d ~= loading then
-            pcall(function()
-                Tween:Create(d, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
-            end)
         end
     end
 
-    task.wait(0.45)
+    task.wait(0.4)
     loading:Destroy()
 
-    -- 6. 显示主 UI（放大进入）
     main.Visible = true
     main.Size = UDim2.new(0, 100, 0, 80)
     Tween:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 520, 0, 380)
+        Size = UDim2.new(0, 540, 0, 400)
     }):Play()
 
     inf("加载动画播放完成")
@@ -1319,5 +1367,5 @@ end)
 
 ok("加载动画已启动")
 inf("=========================================")
-inf("XJ Hub 加载完成 · 播放动画中...")
+inf("XJ Hub · 深度绕过版 加载完成")
 inf("=========================================")
