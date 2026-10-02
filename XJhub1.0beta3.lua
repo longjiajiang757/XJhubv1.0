@@ -1,5 +1,5 @@
 -- ============================================================
--- XJ Hub 1.0 beta · 修复版
+-- XJ Hub 1.0 beta · 稳定版
 -- 作者: 嘉酱
 -- ============================================================
 
@@ -32,7 +32,7 @@ local S = {
 }
 
 -- ============================================================
--- 绕过（只做必要的，避免破坏游戏）
+-- 绕过反作弊（用 getrawmetatable 方式，安全）
 -- ============================================================
 inf("========== 绕过模块自检 ==========")
 local bypassScore, bypassTotal = 0, 0
@@ -47,52 +47,7 @@ local function checkBypass(name, fn)
     end
 end
 
--- 1. 环境检测
-checkBypass("hookmetamethod 可用", function()
-    if not hookmetamethod then error("不可用") end
-end)
-checkBypass("newcclosure 可用", function()
-    if not newcclosure then error("不可用") end
-end)
-
--- 2. 只做一次 namecall hook（合并所有检查）
-checkBypass("namecall 统一拦截", function()
-    if not (hookmetamethod and newcclosure and getnamecallmethod) then
-        error("缺少前置")
-    end
-    local orig = hookmetamethod
-    orig(game, "__namecall", newcclosure(function(self, ...)
-        local packed = table.pack(...)
-        local method = getnamecallmethod()
-
-        -- Kick 屏蔽
-        if method == "Kick" and self == LP then return end
-
-        -- 只拦敏感事件，不动游戏正常流程
-        if method == "FireServer" and self.Name == "PlayerEvent" then
-            local first = packed[1]
-            -- 只屏蔽明显的反作弊上报事件
-            if first == "reportExploiter" or first == "exploitReport"
-                or first == "reportCheater" then
-                return
-            end
-            if S.noFallDamage and first == "takeDamage" then return nil end
-        end
-
-        -- PlayerFunc 敏感调用返回假值
-        if method == "InvokeServer" and self.Name == "PlayerFunc" then
-            local first = packed[1]
-            if first == "getPlayerBanHistory" or first == "checkExploit"
-                or first == "getSecret" or first == "getClientInfo" then
-                return true
-            end
-        end
-
-        return orig(self, table.unpack(packed, 1, packed.n))
-    end))
-end)
-
--- 3. AntiCheat 表替换
+-- 1. AntiCheat 表替换
 checkBypass("AntiCheat 表替换", function()
     local ac = RS:FindFirstChild("AntiCheat", true)
     if ac and type(ac) == "table" then
@@ -108,7 +63,7 @@ checkBypass("AntiCheat 表替换", function()
     end
 end)
 
--- 4. Ratchet 补丁
+-- 2. Ratchet 补丁
 checkBypass("Ratchet 补丁", function()
     local Ratchet = require(RS:FindFirstChild("Ratchet", true))
     local Sha256  = require(RS:FindFirstChild("Sha256", true))
@@ -125,7 +80,7 @@ checkBypass("Ratchet 补丁", function()
     end
 end)
 
--- 5. Ragdoll 补丁
+-- 3. Ragdoll 补丁
 checkBypass("Ragdoll 补丁", function()
     local Ragdoll = require(RS.Modules.Ragdoll)
     local a = Ragdoll.activate
@@ -135,7 +90,22 @@ checkBypass("Ragdoll 补丁", function()
     end
 end)
 
--- 6. 清理上报远程
+-- 4. Kick 拦截（用 getrawmetatable 方式，安全）
+checkBypass("Kick 拦截", function()
+    if not getrawmetatable or not setreadonly then error("缺少 getrawmetatable/setreadonly") end
+    local mt = getrawmetatable(game)
+    if not mt or not mt.__namecall then error("无 __namecall") end
+    local orig = mt.__namecall
+    setreadonly(mt, false)
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "Kick" and self == LP then return end
+        return orig(self, ...)
+    end)
+    setreadonly(mt, true)
+end)
+
+-- 5. 上报远程清理
 checkBypass("上报远程清理", function()
     local remote = RS:FindFirstChild("Remote", true)
     if remote then
@@ -149,13 +119,6 @@ checkBypass("上报远程清理", function()
 end)
 
 inf("绕过自检: " .. bypassScore .. "/" .. bypassTotal)
-if bypassScore == bypassTotal then
-    ok("全部绕过模块已启动")
-elseif bypassScore >= bypassTotal * 0.7 then
-    inf("大部分绕过已启动")
-else
-    no("绕过能力较弱")
-end
 
 -- ========== 环境自检 ==========
 for _, name in ipairs({ "loadstring", "getgc", "hookmetamethod", "newcclosure",
@@ -186,6 +149,27 @@ end)
 if Core then ok("Core") end
 if Character then ok("Character") end
 if Controls then ok("Controls") end
+
+-- ========== 性能统计 ==========
+local stats = { fps = 0, ping = 0, frames = 0, lastTick = tick() }
+RunSvc.RenderStepped:Connect(function()
+    stats.frames = stats.frames + 1
+    local now = tick()
+    if now - stats.lastTick >= 1 then
+        stats.fps = stats.frames
+        stats.frames = 0
+        stats.lastTick = now
+    end
+end)
+task.spawn(function()
+    while true do
+        pcall(function()
+            stats.ping = math.floor((LP:GetNetworkPing() or 0) * 1000)
+        end)
+        task.wait(1)
+    end
+end)
+ok("性能统计")
 
 -- ========== 工具 ==========
 local function getChar(p)
@@ -585,8 +569,8 @@ screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screen.Parent = uiParent
 
 local main = Instance.new("Frame", screen)
-main.Size = UDim2.new(0, 480, 0, 360)
-main.Position = UDim2.new(0.5, -240, 0.5, -180)
+main.Size = UDim2.new(0, 500, 0, 380)
+main.Position = UDim2.new(0.5, -250, 0.5, -190)
 main.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
 main.BorderSizePixel = 0
 main.ClipsDescendants = true
@@ -617,8 +601,9 @@ task.spawn(function()
     end
 end)
 
+-- 标题栏
 local topbar = Instance.new("Frame", main)
-topbar.Size = UDim2.new(1, 0, 0, 46)
+topbar.Size = UDim2.new(1, 0, 0, 48)
 topbar.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
 topbar.BackgroundTransparency = 0.2
 topbar.BorderSizePixel = 0
@@ -645,7 +630,7 @@ title.TextColor3 = Color3.new(1,1,1); title.Font = Enum.Font.GothamBold
 title.TextSize = 14; title.TextXAlignment = Enum.TextXAlignment.Left
 
 local sub = Instance.new("TextLabel", topbar)
-sub.Size = UDim2.new(0, 260, 0, 12); sub.Position = UDim2.new(0, 48, 0, 25)
+sub.Size = UDim2.new(0, 260, 0, 12); sub.Position = UDim2.new(0, 48, 0, 26)
 sub.BackgroundTransparency = 1
 sub.Text = "绕过 " .. bypassScore .. "/" .. bypassTotal .. " · 作者 嘉酱"
 sub.TextColor3 = (bypassScore == bypassTotal) and Color3.fromRGB(120, 230, 150) or Color3.fromRGB(255, 200, 100)
@@ -682,6 +667,7 @@ end
 blockTopbarDrag(minBtn)
 blockTopbarDrag(closeBtn)
 
+-- 悬浮球
 local bubble = Instance.new("TextButton", screen)
 bubble.Size = UDim2.new(0, 48, 0, 48)
 bubble.Position = UDim2.new(0, 20, 0.5, -24)
@@ -740,7 +726,7 @@ local function restore()
     main.Visible = true
     main.Size = UDim2.new(0, 90, 0, 70)
     Tween:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 480, 0, 360)
+        Size = UDim2.new(0, 500, 0, 380)
     }):Play()
 end
 UIS.InputEnded:Connect(function(input)
@@ -752,6 +738,7 @@ end)
 minBtn.MouseButton1Click:Connect(minimize)
 closeBtn.MouseButton1Click:Connect(function() screen:Destroy() end)
 
+-- 拖拽
 local drag, dStart, dPos = false, nil, nil
 topbar.InputBegan:Connect(function(input)
     if blockDrag then return end
@@ -775,9 +762,10 @@ UIS.InputEnded:Connect(function(input)
     end
 end)
 
+-- 侧栏
 local sidebar = Instance.new("Frame", main)
-sidebar.Size = UDim2.new(0, 100, 1, -58)
-sidebar.Position = UDim2.new(0, 8, 0, 52)
+sidebar.Size = UDim2.new(0, 100, 1, -60)
+sidebar.Position = UDim2.new(0, 8, 0, 54)
 sidebar.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
 sidebar.BackgroundTransparency = 0.2
 sidebar.BorderSizePixel = 0
@@ -808,8 +796,8 @@ np.PaddingTop = UDim.new(0, 5); np.PaddingBottom = UDim.new(0, 5)
 np.PaddingLeft = UDim.new(0, 5); np.PaddingRight = UDim.new(0, 5)
 
 local content = Instance.new("Frame", main)
-content.Size = UDim2.new(1, -116, 1, -58)
-content.Position = UDim2.new(0, 108, 0, 52)
+content.Size = UDim2.new(1, -116, 1, -60)
+content.Position = UDim2.new(0, 108, 0, 54)
 content.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
 content.BackgroundTransparency = 0.2
 content.BorderSizePixel = 0
@@ -932,12 +920,6 @@ local function createToggle(parent, name, def, cb)
         state = not state; refresh()
         if cb then pcall(cb, state) end
     end)
-    btn.MouseEnter:Connect(function()
-        Tween:Create(btn, TweenInfo.new(0.1), { BackgroundColor3 = Color3.fromRGB(36, 36, 50) }):Play()
-    end)
-    btn.MouseLeave:Connect(function()
-        Tween:Create(btn, TweenInfo.new(0.1), { BackgroundColor3 = Color3.fromRGB(28, 28, 40) }):Play()
-    end)
 end
 
 local function createSlider(parent, name, min, max, def, cb)
@@ -1051,7 +1033,8 @@ currentTab = "主页"
 tabButtons["主页"].lbl.TextColor3 = Color3.new(1,1,1)
 tabButtons["主页"].ico.TextColor3 = Color3.new(1,1,1)
 
--- 主页
+-- ========== 主页 ==========
+-- 欢迎卡
 local welcome = Instance.new("Frame", pHome)
 welcome.Size = UDim2.new(1, 0, 0, 70)
 welcome.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
@@ -1071,7 +1054,7 @@ welcomeTitle.TextXAlignment = Enum.TextXAlignment.Left
 local welcomeSub = Instance.new("TextLabel", welcome)
 welcomeSub.Size = UDim2.new(1, -20, 0, 16); welcomeSub.Position = UDim2.new(0, 12, 0, 32)
 welcomeSub.BackgroundTransparency = 1
-welcomeSub.Text = "玩家: " .. LP.Name .. "  ·  服务器: " .. tostring(game.PlaceId)
+welcomeSub.Text = "玩家: " .. LP.Name .. "  ·  队伍: " .. teamLabel(LP)
 welcomeSub.TextColor3 = Color3.fromRGB(190, 190, 210)
 welcomeSub.Font = Enum.Font.Gotham
 welcomeSub.TextSize = 11
@@ -1080,26 +1063,100 @@ welcomeSub.TextXAlignment = Enum.TextXAlignment.Left
 local welcomeBy = Instance.new("TextLabel", welcome)
 welcomeBy.Size = UDim2.new(1, -20, 0, 16); welcomeBy.Position = UDim2.new(0, 12, 0, 48)
 welcomeBy.BackgroundTransparency = 1
-welcomeBy.Text = "作者: 嘉酱  ·  版本: 1.0 beta"
+welcomeBy.Text = "服务器: " .. tostring(game.PlaceId) .. "  ·  作者: 嘉酱"
 welcomeBy.TextColor3 = Color3.fromRGB(190, 130, 255)
 welcomeBy.Font = Enum.Font.Gotham
 welcomeBy.TextSize = 11
 welcomeBy.TextXAlignment = Enum.TextXAlignment.Left
 
+-- 实时数据卡
+local statsCard = Instance.new("Frame", pHome)
+statsCard.Size = UDim2.new(1, 0, 0, 70)
+statsCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+statsCard.BackgroundTransparency = 0.1
+statsCard.BorderSizePixel = 0
+Instance.new("UICorner", statsCard).CornerRadius = UDim.new(0, 8)
+
+local statsTitle = Instance.new("TextLabel", statsCard)
+statsTitle.Size = UDim2.new(1, -20, 0, 18); statsTitle.Position = UDim2.new(0, 12, 0, 6)
+statsTitle.BackgroundTransparency = 1
+statsTitle.Text = "📊 实时数据"
+statsTitle.TextColor3 = Color3.fromRGB(150, 200, 255)
+statsTitle.Font = Enum.Font.GothamBold
+statsTitle.TextSize = 12
+statsTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+-- FPS / Ping / 玩家数 三列
+local statsRow = Instance.new("Frame", statsCard)
+statsRow.Size = UDim2.new(1, -20, 0, 40); statsRow.Position = UDim2.new(0, 10, 0, 24)
+statsRow.BackgroundTransparency = 1
+local srl = Instance.new("UIListLayout", statsRow)
+srl.FillDirection = Enum.FillDirection.Horizontal
+srl.Padding = UDim.new(0, 6)
+
+local function makeStatCell(parent, label, color)
+    local cell = Instance.new("Frame", parent)
+    cell.Size = UDim2.new(1/3, -4, 1, 0)
+    cell.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+    cell.BorderSizePixel = 0
+    Instance.new("UICorner", cell).CornerRadius = UDim.new(0, 6)
+    local title = Instance.new("TextLabel", cell)
+    title.Size = UDim2.new(1, 0, 0, 12); title.Position = UDim2.new(0, 0, 0, 3)
+    title.BackgroundTransparency = 1
+    title.Text = label
+    title.TextColor3 = Color3.fromRGB(150, 150, 180)
+    title.Font = Enum.Font.Gotham
+    title.TextSize = 9
+    local value = Instance.new("TextLabel", cell)
+    value.Size = UDim2.new(1, 0, 0, 18); value.Position = UDim2.new(0, 0, 0, 16)
+    value.BackgroundTransparency = 1
+    value.Text = "0"
+    value.TextColor3 = color
+    value.Font = Enum.Font.GothamBold
+    value.TextSize = 14
+    return value
+end
+
+local fpsValue = makeStatCell(statsRow, "FPS", Color3.fromRGB(80, 220, 100))
+local pingValue = makeStatCell(statsRow, "PING", Color3.fromRGB(255, 200, 100))
+local playerValue = makeStatCell(statsRow, "玩家", Color3.fromRGB(180, 130, 255))
+
+-- 定时更新
+task.spawn(function()
+    while screen.Parent do
+        pcall(function()
+            fpsValue.Text = tostring(stats.fps)
+            if stats.ping > 200 then
+                pingValue.Text = stats.ping .. " ms"
+                pingValue.TextColor3 = Color3.fromRGB(255, 80, 60)
+            elseif stats.ping > 100 then
+                pingValue.Text = stats.ping .. " ms"
+                pingValue.TextColor3 = Color3.fromRGB(255, 200, 100)
+            else
+                pingValue.Text = stats.ping .. " ms"
+                pingValue.TextColor3 = Color3.fromRGB(80, 220, 100)
+            end
+            playerValue.Text = tostring(#Players:GetPlayers()) .. "/" .. Players.MaxPlayers
+        end)
+        task.wait(0.5)
+    end
+end)
+
+-- 绕过状态卡
 local bypassCard = Instance.new("Frame", pHome)
-bypassCard.Size = UDim2.new(1, 0, 0, 100)
+bypassCard.Size = UDim2.new(1, 0, 0, 90)
 bypassCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
 bypassCard.BackgroundTransparency = 0.1
 bypassCard.BorderSizePixel = 0
 Instance.new("UICorner", bypassCard).CornerRadius = UDim.new(0, 8)
 
 local bpTitle = Instance.new("TextLabel", bypassCard)
-bpTitle.Size = UDim2.new(1, -20, 0, 20); bpTitle.Position = UDim2.new(0, 12, 0, 8)
+bpTitle.Size = UDim2.new(1, -20, 0, 18); bpTitle.Position = UDim2.new(0, 12, 0, 6)
 bpTitle.BackgroundTransparency = 1
 bpTitle.Text = "🛡️ 绕过模块状态"
 bpTitle.TextColor3 = Color3.fromRGB(190, 130, 255)
 bpTitle.Font = Enum.Font.GothamBold
-bpTitle.TextSize = 13
+bpTitle.TextSize = 12
 bpTitle.TextXAlignment = Enum.TextXAlignment.Left
 
 local statusColor = (bypassScore == bypassTotal) and Color3.fromRGB(60, 220, 100)
@@ -1107,16 +1164,16 @@ local statusColor = (bypassScore == bypassTotal) and Color3.fromRGB(60, 220, 100
     or Color3.fromRGB(255, 60, 60))
 
 local bpStatus = Instance.new("TextLabel", bypassCard)
-bpStatus.Size = UDim2.new(1, -20, 0, 22); bpStatus.Position = UDim2.new(0, 12, 0, 30)
+bpStatus.Size = UDim2.new(1, -20, 0, 20); bpStatus.Position = UDim2.new(0, 12, 0, 26)
 bpStatus.BackgroundTransparency = 1
 bpStatus.Text = bypassScore .. " / " .. bypassTotal .. " 项已启动"
 bpStatus.TextColor3 = statusColor
 bpStatus.Font = Enum.Font.GothamBold
-bpStatus.TextSize = 16
+bpStatus.TextSize = 15
 bpStatus.TextXAlignment = Enum.TextXAlignment.Left
 
 local bpBar = Instance.new("Frame", bypassCard)
-bpBar.Size = UDim2.new(1, -24, 0, 6); bpBar.Position = UDim2.new(0, 12, 0, 58)
+bpBar.Size = UDim2.new(1, -24, 0, 6); bpBar.Position = UDim2.new(0, 12, 0, 52)
 bpBar.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
 bpBar.BorderSizePixel = 0
 Instance.new("UICorner", bpBar).CornerRadius = UDim.new(1, 0)
@@ -1128,42 +1185,15 @@ bpFill.BorderSizePixel = 0
 Instance.new("UICorner", bpFill).CornerRadius = UDim.new(1, 0)
 
 local bpDetail = Instance.new("TextLabel", bypassCard)
-bpDetail.Size = UDim2.new(1, -20, 0, 20); bpDetail.Position = UDim2.new(0, 12, 0, 70)
+bpDetail.Size = UDim2.new(1, -20, 0, 16); bpDetail.Position = UDim2.new(0, 12, 0, 66)
 bpDetail.BackgroundTransparency = 1
-bpDetail.Text = bypassScore == bypassTotal
-    and "✅ 全部绕过已就绪"
-    or (bypassScore >= bypassTotal * 0.7 and "⚠️ 部分绕过失败 · 风险较高" or "❌ 绕过能力弱 · 不建议使用")
+bpDetail.Text = bypassScore == bypassTotal and "✅ 全部绕过已就绪" or "⚠️ 部分绕过失败"
 bpDetail.TextColor3 = statusColor
 bpDetail.Font = Enum.Font.Gotham
-bpDetail.TextSize = 11
+bpDetail.TextSize = 10
 bpDetail.TextXAlignment = Enum.TextXAlignment.Left
 
-local tipCard = Instance.new("Frame", pHome)
-tipCard.Size = UDim2.new(1, 0, 0, 60)
-tipCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-tipCard.BackgroundTransparency = 0.1
-tipCard.BorderSizePixel = 0
-Instance.new("UICorner", tipCard).CornerRadius = UDim.new(0, 8)
-
-local tipTitle = Instance.new("TextLabel", tipCard)
-tipTitle.Size = UDim2.new(1, -20, 0, 18); tipTitle.Position = UDim2.new(0, 12, 0, 6)
-tipTitle.BackgroundTransparency = 1
-tipTitle.Text = "💡 使用提示"
-tipTitle.TextColor3 = Color3.fromRGB(150, 200, 255)
-tipTitle.Font = Enum.Font.GothamBold
-tipTitle.TextSize = 12
-tipTitle.TextXAlignment = Enum.TextXAlignment.Left
-
-local tipTxt = Instance.new("TextLabel", tipCard)
-tipTxt.Size = UDim2.new(1, -20, 0, 30); tipTxt.Position = UDim2.new(0, 12, 0, 26)
-tipTxt.BackgroundTransparency = 1
-tipTxt.Text = "• 左侧分类切换功能\n• 点 － 最小化，点悬浮球恢复"
-tipTxt.TextColor3 = Color3.fromRGB(190, 190, 210)
-tipTxt.Font = Enum.Font.Gotham
-tipTxt.TextSize = 11
-tipTxt.TextXAlignment = Enum.TextXAlignment.Left
-tipTxt.TextYAlignment = Enum.TextYAlignment.Top
-
+-- 玩家页
 createToggle(pPlayer, "无限体力", false, function(v) S.stamina = v end)
 createToggle(pPlayer, "无限饥饿", false, function(v) S.food = v end)
 createToggle(pPlayer, "防布娃娃", false, function(v) S.noRagdoll = v end)
@@ -1173,6 +1203,7 @@ createToggle(pPlayer, "快速射击", false, function(v) S.rapidFire = v end)
 createToggle(pPlayer, "自动捡钱", false, function(v) S.autoMoney = v end)
 createToggle(pPlayer, "自动农民", false, function(v) S.autoFarmer = v end)
 
+-- 战斗页
 createToggle(pCombat, "杀戮光环", false, function(v) S.auraEnabled = v end)
 createToggle(pCombat, "拟人化延迟", true, function(v) S.auraHumanize = v end)
 createToggle(pCombat, "静默模式", false, function(v) S.auraSilent = v end)
@@ -1180,6 +1211,7 @@ createSlider(pCombat, "光环范围", 50, 800, 200, function(v) S.auraRange = v 
 createSlider(pCombat, "光环伤害", 1, 100, 5, function(v) S.auraDamage = v end)
 createToggle(pCombat, "自动铐", false, function(v) S.autoCuff = v end)
 
+-- 自瞄页
 createToggle(pAim, "开启自瞄（右键触发）", false, function(v) S.aimbot.enabled = v end)
 createToggle(pAim, "显示 FOV 圈", true, function(v) S.aimbot.showFov = v end)
 createToggle(pAim, "显示追踪线", false, function(v) S.aimbot.showTracer = v end)
@@ -1187,6 +1219,7 @@ createDropdown(pAim, "FOV 颜色", {"红色", "绿色", "蓝色", "紫色", "白
 createSlider(pAim, "FOV 大小", 20, 400, 120, function(v) S.aimbot.fov = v end)
 createSlider(pAim, "平滑度", 1, 10, 3, function(v) S.aimbot.smoothness = v / 10 end)
 
+-- 透视页
 createToggle(pEsp, "开启透视", false, function(v) S.esp.enabled = v end)
 createToggle(pEsp, "显示名字", true, function(v) S.esp.name = v end)
 createToggle(pEsp, "显示职业", true, function(v) S.esp.team = v end)
@@ -1195,6 +1228,7 @@ createToggle(pEsp, "显示血量", true, function(v) S.esp.health = v end)
 createToggle(pEsp, "显示血条", true, function(v) S.esp.bar = v end)
 createToggle(pEsp, "显示高亮", true, function(v) S.esp.highlight = v end)
 
+-- 飞车页
 createToggle(pCar, "飞行模式", false, function(v)
     S.flyEnabled = v
     if v then startFly() else stopFly() end
@@ -1218,7 +1252,7 @@ createSlider(pCar, "跳跃高度", 50, 400, 100, function(v) S.jumpPower = v end
 ok("UI 构建完成")
 
 -- ============================================================
--- 加载动画（缩短时间）
+-- 加载动画
 -- ============================================================
 local loading = Instance.new("Frame", screen)
 loading.Size = UDim2.new(1, 0, 1, 0)
@@ -1377,7 +1411,7 @@ task.spawn(function()
     main.Visible = true
     main.Size = UDim2.new(0, 90, 0, 70)
     Tween:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 480, 0, 360)
+        Size = UDim2.new(0, 500, 0, 380)
     }):Play()
 end)
 
