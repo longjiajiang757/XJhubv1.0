@@ -1,5 +1,5 @@
 -- ============================================================
--- XJ Hub 1.0 beta · 修复+扩展版
+-- XJ Hub 1.0 beta · 最终整合版
 -- 作者: 嘉酱
 -- ============================================================
 
@@ -18,9 +18,7 @@ local function inf(m) print("[XJ] ℹ️ " .. m) end
 
 inf("XJ Hub 开始加载")
 
--- ============================================================
--- 1. ScreenGui
--- ============================================================
+-- ========== ScreenGui ==========
 local uiParent = (gethui and gethui()) or game:GetService("CoreGui")
 local oldGui = uiParent:FindFirstChild("XJHubUI")
 if oldGui then oldGui:Destroy() end
@@ -33,17 +31,18 @@ screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screen.Parent = uiParent
 ok("ScreenGui")
 
--- ============================================================
--- 2. 状态（已删除 Ragebot）
--- ============================================================
+-- ========== 状态 ==========
 local S = {
     stamina = false, food = false, infiniteAmmo = false, rapidFire = false,
     speedEnabled = false, speedValue = 100,
     jumpEnabled = false, jumpPower = 50, jumpMultiplier = 1, infiniteJump = false,
     auraEnabled = false, auraRange = 200, auraDamage = 5, auraHumanize = true, auraSilent = false,
     autoCuff = false,
-    aimbot = { enabled = false, fov = 120, smoothness = 0.3, showFov = true,
-               showTracer = false, color = "红色", keyHeld = false, targetPart = "头部" },
+    aimbot = {
+        enabled = false, fov = 120, smoothness = 0.3, showFov = true,
+        showTracer = false, color = "红色", keyHeld = false, targetPart = "头部",
+        friendCheck = false, wallCheck = false, teamCheck = false, crewCheck = false,
+    },
     esp = { enabled = false, name = true, distance = true, health = true,
             team = true, highlight = true, bar = true, colorByTeam = true },
     autoMoney = false, autoFarmer = false, autoMission = false, autoHack = false,
@@ -52,10 +51,8 @@ local S = {
     ghost = false, noRagdoll = false, noFallDamage = false, antiPrisonPull = false,
 }
 
--- ============================================================
--- 3. 隐蔽绕过自检
--- ============================================================
-inf("========== 隐蔽绕过自检 ==========")
+-- ========== 绕过（3 项） ==========
+inf("========== 绕过自检 ==========")
 local selfCheck = { env = { score = 0, total = 0 }, bypass = { score = 0, total = 0 } }
 local function checkEnv(name, fn)
     selfCheck.env.total = selfCheck.env.total + 1
@@ -76,40 +73,6 @@ checkEnv("fireproximityprompt", function() if not fireproximityprompt then error
 checkEnv("Drawing", function() if not Drawing or not Drawing.new then error() end end)
 checkEnv("gethui", function() if not gethui then error() end end)
 checkEnv("writefile", function() if not writefile then error() end end)
-
-checkBypass("玩家数据隐藏", function()
-    if getgenv then
-        local genv = getgenv()
-        genv.__XJ_HIDDEN = os.time()
-        for _, k in ipairs({"cheat", "exploit", "hack", "injected", "script_hub", "XJ"}) do
-            if genv[k] ~= nil then genv[k] = nil end
-        end
-    end
-end)
-
-checkBypass("warn 过滤", function()
-    local oldWarn = warn
-    _G.warn = function(...)
-        local msg = tostring((...)):lower()
-        if msg:find("exploit") or msg:find("cheat") or msg:find("hack")
-            or msg:find("anticheat") or msg:find("detected") or msg:find("inject") then
-            return
-        end
-        oldWarn(...)
-    end
-end)
-
-checkBypass("print 过滤", function()
-    local oldPrint = print
-    _G.print = function(...)
-        local msg = tostring((...)):lower()
-        if msg:find("exploit") or msg:find("cheat") or msg:find("hack")
-            or msg:find("anticheat") then
-            return
-        end
-        oldPrint(...)
-    end
-end)
 
 checkBypass("AntiCheat 表替换", function()
     local ac = RS:FindFirstChild("AntiCheat", true)
@@ -148,32 +111,9 @@ checkBypass("Ragdoll 补丁", function()
     end
 end)
 
-checkBypass("上报远程清理", function()
-    local remote = RS:FindFirstChild("Remote", true)
-    if remote then
-        for _, c in ipairs(remote:GetChildren()) do
-            local n = c.Name:lower()
-            if (n:find("report") or n:find("exploit") or n:find("anticheat"))
-                and not n:find("dialog") and not n:find("chat") then
-                pcall(function() c:Destroy() end)
-            end
-        end
-    end
-end)
-
-checkBypass("本地日志清理", function()
-    if writefile and isfile then
-        for _, f in ipairs({"XJHub_log.txt", "XJ_sessions.txt", "exploit_log.txt"}) do
-            pcall(function() if isfile(f) then writefile(f, "") end end)
-        end
-    end
-end)
-
 inf("环境: " .. selfCheck.env.score .. "/" .. selfCheck.env.total .. " · 绕过: " .. selfCheck.bypass.score .. "/" .. selfCheck.bypass.total)
 
--- ============================================================
--- 4. 游戏框架
--- ============================================================
+-- ========== 游戏框架 ==========
 local remote = RS:WaitForChild("Remote", 10)
 local playerEvent = remote and remote:WaitForChild("PlayerEvent", 10)
 local playerFunc  = remote and remote:WaitForChild("PlayerFunc", 10)
@@ -186,12 +126,8 @@ end)
 pcall(function()
     Controls = require(LP.PlayerScripts:WaitForChild("PlayerModule")):GetControls()
 end)
-if Core then ok("Core") end
-if Character then ok("Character") end
 
--- ============================================================
--- 5. 工具
--- ============================================================
+-- ========== 工具 ==========
 local function getChar(p)
     p = p or LP
     local c = p.Character
@@ -223,9 +159,37 @@ local TEAM_NAMES = {
 local function teamColor(p) return TEAM_COLORS[p.Team and p.Team.Name] or Color3.fromRGB(200, 200, 200) end
 local function teamLabel(p) return TEAM_NAMES[p.Team and p.Team.Name] or (p.Team and p.Team.Name or "无") end
 
--- ============================================================
--- 6. 性能统计
--- ============================================================
+local CREW_TEAMS = { Civilian = true, Delivery = true, Transit = true }
+
+-- ========== 好友预加载（修复：去掉多余翻页） ==========
+local friendSet = {}
+task.spawn(function()
+    pcall(function()
+        local page = LP:GetFriendsOnline(200)
+        if page then
+            for _, f in ipairs(page) do friendSet[f.VisitorId] = true end
+        end
+    end)
+    pcall(function()
+        local cursor = ""
+        local safety = 0
+        repeat
+            safety = safety + 1
+            if safety > 20 then break end
+            local p2 = LP:GetFriendsAsync(cursor)
+            if p2 then
+                for _, f in ipairs(p2:GetCurrentPage()) do friendSet[f.Id] = true end
+                cursor = p2.Cursor
+            end
+        until not cursor or cursor == ""
+    end)
+    local n = 0
+    for _ in pairs(friendSet) do n = n + 1 end
+    ok("[好友] 预加载 " .. n .. " 人")
+end)
+local function isFriend(p) return friendSet[p.UserId] == true end
+
+-- ========== 性能统计 ==========
 local stats = { fps = 0, frames = 0, lastTick = tick(), ping = 0, espCycles = 0, espAvgTime = 0 }
 task.spawn(function()
     while screen.Parent do
@@ -235,9 +199,7 @@ task.spawn(function()
 end)
 ok("性能统计")
 
--- ============================================================
--- 7. 玩家信息
--- ============================================================
+-- ========== 玩家信息 ==========
 local userInfo = {
     name = LP.Name,
     displayName = LP.DisplayName or LP.Name,
@@ -247,9 +209,7 @@ local userInfo = {
     thumb = "rbxthumb://type=AvatarHeadShot&id=" .. LP.UserId .. "&w=150&h=150",
 }
 
--- ============================================================
--- 8. 渲染循环
--- ============================================================
+-- ========== 自瞄（修复 hasWallCheck nil） ==========
 local PART_MAP = { ["头部"] = {"Head"}, ["胸部"] = {"UpperTorso", "Torso"} }
 local function getTargetPart(c)
     for _, n in ipairs(PART_MAP[S.aimbot.targetPart] or {"Head"}) do
@@ -258,6 +218,7 @@ local function getTargetPart(c)
     end
     return c:FindFirstChild("HumanoidRootPart")
 end
+
 local COLOR_MAP = {
     ["红色"] = Color3.fromRGB(255, 0, 0), ["绿色"] = Color3.fromRGB(0, 255, 0),
     ["蓝色"] = Color3.fromRGB(0, 150, 255), ["紫色"] = Color3.fromRGB(168, 85, 247),
@@ -266,6 +227,30 @@ local COLOR_MAP = {
 local function aimColor()
     if S.aimbot.color == "彩虹" then return Color3.fromHSV(tick() % 5 / 5, 1, 1) end
     return COLOR_MAP[S.aimbot.color] or Color3.fromRGB(255, 0, 0)
+end
+
+local function isSameTeam(p)
+    if not LP.Team or not p.Team then return false end
+    return LP.Team == p.Team
+end
+
+local function isCrew(p)
+    if not p.Team or not p.Team.Name then return false end
+    return CREW_TEAMS[p.Team.Name] == true
+end
+
+-- ✅ 修复：过滤 nil
+local function hasWallCheck(targetPart, targetChar)
+    local cam = WS.CurrentCamera
+    if not cam then return false end
+    local filterList = { cam }
+    if LP.Character then table.insert(filterList, LP.Character) end
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = filterList
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.IgnoreWater = true
+    local hit = WS:Raycast(cam.CFrame.Position, targetPart.Position - cam.CFrame.Position, params)
+    return not hit or hit.Instance:IsDescendantOf(targetChar)
 end
 
 local fovCircle = Drawing and Drawing.new("Circle")
@@ -277,22 +262,38 @@ RunSvc.RenderStepped:Connect(function(dt)
     if tick() - stats.lastTick >= 1 then
         stats.fps = stats.frames; stats.frames = 0; stats.lastTick = tick()
     end
+
     if S.speedEnabled then
         local _, h = getChar()
         if h then h.WalkSpeed = S.speedValue end
     end
+
     local cam = WS.CurrentCamera
     if not cam then return end
     local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
+
     if fovCircle then
-        fovCircle.Position = center; fovCircle.Radius = S.aimbot.fov
-        fovCircle.Thickness = 2; fovCircle.Color = aimColor()
+        fovCircle.Position = center
+        fovCircle.Radius = S.aimbot.fov
+        fovCircle.Thickness = 2
+        fovCircle.Color = aimColor()
         fovCircle.Visible = S.aimbot.enabled and S.aimbot.showFov
     end
-    if S.aimbot.enabled and S.aimbot.keyHeld then
-        local tgt, bd = nil, S.aimbot.fov
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LP then
+
+    if not (S.aimbot.enabled and S.aimbot.keyHeld) then
+        if tracerLine then tracerLine.Visible = false end
+        return
+    end
+
+    local tgt, bd = nil, S.aimbot.fov
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP then
+            local skip = false
+            if S.aimbot.friendCheck and isFriend(p) then skip = true end
+            if not skip and S.aimbot.teamCheck and isSameTeam(p) then skip = true end
+            if not skip and S.aimbot.crewCheck and isCrew(p) then skip = true end
+
+            if not skip then
                 local c, h = getChar(p)
                 if c and h and h.Health > 0 then
                     local part = getTargetPart(c)
@@ -300,27 +301,36 @@ RunSvc.RenderStepped:Connect(function(dt)
                         local sp, on = cam:WorldToViewportPoint(part.Position)
                         if on then
                             local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                            if d < bd then tgt, bd = part, d end
+                            if d < bd then
+                                if not S.aimbot.wallCheck or hasWallCheck(part, c) then
+                                    tgt, bd = part, d
+                                end
+                            end
                         end
                     end
                 end
             end
         end
-        if tgt then
-            if S.aimbot.showTracer and tracerLine then
-                local sp = cam:WorldToViewportPoint(tgt.Position)
-                tracerLine.From = center; tracerLine.To = Vector2.new(sp.X, sp.Y)
-                tracerLine.Color = aimColor(); tracerLine.Visible = true
-            elseif tracerLine then tracerLine.Visible = false end
-            cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, tgt.Position), S.aimbot.smoothness)
-        elseif tracerLine then tracerLine.Visible = false end
-    elseif tracerLine then tracerLine.Visible = false end
-end)
-ok("渲染循环")
+    end
 
--- ============================================================
--- 9. 核心循环
--- ============================================================
+    if tgt then
+        if S.aimbot.showTracer and tracerLine then
+            local sp = cam:WorldToViewportPoint(tgt.Position)
+            tracerLine.From = center
+            tracerLine.To = Vector2.new(sp.X, sp.Y)
+            tracerLine.Color = aimColor()
+            tracerLine.Visible = true
+        elseif tracerLine then
+            tracerLine.Visible = false
+        end
+        cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, tgt.Position), S.aimbot.smoothness)
+    elseif tracerLine then
+        tracerLine.Visible = false
+    end
+end)
+ok("自瞄")
+
+-- ========== 核心循环 ==========
 task.spawn(function()
     while screen.Parent do
         pcall(function()
@@ -366,9 +376,7 @@ task.spawn(function()
 end)
 ok("快速射击")
 
--- ============================================================
--- 10. 杀戮光环（已修复）
--- ============================================================
+-- ========== 杀戮光环 ==========
 task.spawn(function()
     while screen.Parent do
         if S.auraEnabled and playerEvent then
@@ -397,14 +405,13 @@ task.spawn(function()
                 end
             end)
         end
-        task.wait(S.auraSilent and 0.3 or (S.auraHumanize and (0.1 + math.random() * 0.05) or 0.1))
+        local w = S.auraSilent and 0.3 or (S.auraHumanize and (0.1 + math.random() * 0.04) or 0.1)
+        task.wait(w)
     end
 end)
 ok("杀戮光环")
 
--- ============================================================
--- 11. 自动铐
--- ============================================================
+-- ========== 自动铐 ==========
 task.spawn(function()
     while screen.Parent do
         if S.autoCuff and playerFunc then
@@ -427,9 +434,7 @@ task.spawn(function()
 end)
 ok("自动铐")
 
--- ============================================================
--- 12. 自动捡钱/农民
--- ============================================================
+-- ========== 自动捡钱/农民 ==========
 task.spawn(function()
     while screen.Parent do
         if S.autoMoney or S.autoFarmer then
@@ -465,9 +470,7 @@ task.spawn(function()
 end)
 ok("自动捡钱/农民")
 
--- ============================================================
--- 13. 自动接任务
--- ============================================================
+-- ========== 自动接任务 ==========
 task.spawn(function()
     while screen.Parent do
         if S.autoMission and playerFunc then
@@ -492,9 +495,7 @@ task.spawn(function()
 end)
 ok("自动接任务")
 
--- ============================================================
--- 14. 自动黑客小游戏
--- ============================================================
+-- ========== 自动黑客 ==========
 task.spawn(function()
     while screen.Parent do
         if S.autoHack then
@@ -510,11 +511,9 @@ task.spawn(function()
         task.wait(2)
     end
 end)
-ok("自动黑客小游戏")
+ok("自动黑客")
 
--- ============================================================
--- 15. 隐身
--- ============================================================
+-- ========== 隐身 ==========
 task.spawn(function()
     while screen.Parent do
         if S.ghost and playerFunc then
@@ -530,9 +529,7 @@ task.spawn(function()
 end)
 ok("隐身")
 
--- ============================================================
--- 16. 飞行/穿墙
--- ============================================================
+-- ========== 飞行/穿墙 ==========
 local FlyState = { flyConn = nil, noclipConn = nil, cache = {} }
 local function stopFly()
     if FlyState.flyConn then FlyState.flyConn:Disconnect(); FlyState.flyConn = nil end
@@ -591,11 +588,8 @@ UIS.JumpRequest:Connect(function()
 end)
 ok("飞行/穿墙")
 
--- ============================================================
--- 17. ESP
--- ============================================================
+-- ========== ESP ==========
 local espCache = {}
-
 local function buildESP(p, char, hrp)
     local bill = Instance.new("BillboardGui")
     bill.Name = "XJ_ESP_" .. p.Name
@@ -708,23 +702,21 @@ task.spawn(function()
 end)
 ok("ESP")
 
--- ============================================================
--- 18. 新增：远程购买
--- ============================================================
+-- ========== 远程购买/工具 ==========
 local function initAutoPurchase()
     task.spawn(function()
         while screen.Parent do
             if S.autoPurchase then
                 pcall(function()
-                    local char, hum, hrp = getChar()
+                    local _, _, hrp = getChar()
                     if hrp then
                         for _, prompt in ipairs(WS:GetDescendants()) do
                             if prompt:IsA("ProximityPrompt") then
-                                local actionText = string.lower(prompt.ActionText or "")
-                                local objectText = string.lower(prompt.ObjectText or "")
-                                if actionText:find("buy") or actionText:find("purchase")
-                                    or objectText:find("shop") or objectText:find("store")
-                                    or objectText:find("gun") or objectText:find("weapon") then
+                                local at = string.lower(prompt.ActionText or "")
+                                local ot = string.lower(prompt.ObjectText or "")
+                                if at:find("buy") or at:find("purchase")
+                                    or ot:find("shop") or ot:find("store")
+                                    or ot:find("gun") or ot:find("weapon") then
                                     local parent = prompt.Parent
                                     local pos = parent:IsA("BasePart") and parent.Position or nil
                                     if pos and (hrp.Position - pos).Magnitude < 20 then
@@ -742,24 +734,21 @@ local function initAutoPurchase()
     end)
 end
 
--- ============================================================
--- 19. 新增：获取枪械/黑客工具
--- ============================================================
 local function initAutoGrabTools()
     task.spawn(function()
         while screen.Parent do
             if S.autoGrabTools then
                 pcall(function()
-                    local char, hum, hrp = getChar()
+                    local _, _, hrp = getChar()
                     if hrp then
                         for _, prompt in ipairs(WS:GetDescendants()) do
                             if prompt:IsA("ProximityPrompt") then
-                                local actionText = string.lower(prompt.ActionText or "")
-                                local objectText = string.lower(prompt.ObjectText or "")
-                                if actionText:find("grab") or actionText:find("take")
-                                    or actionText:find("pick up") or actionText:find("equip")
-                                    or objectText:find("gun") or objectText:find("weapon")
-                                    or objectText:find("hack") or objectText:find("tool") then
+                                local at = string.lower(prompt.ActionText or "")
+                                local ot = string.lower(prompt.ObjectText or "")
+                                if at:find("grab") or at:find("take")
+                                    or at:find("pick up") or at:find("equip")
+                                    or ot:find("gun") or ot:find("weapon")
+                                    or ot:find("hack") or ot:find("tool") then
                                     local parent = prompt.Parent
                                     local pos = parent:IsA("BasePart") and parent.Position or nil
                                     if pos and (hrp.Position - pos).Magnitude < 20 then
@@ -777,9 +766,6 @@ local function initAutoGrabTools()
     end)
 end
 
--- ============================================================
--- 20. 新增：自动使用黑客工具
--- ============================================================
 local function initAutoUseHack()
     task.spawn(function()
         while screen.Parent do
@@ -789,10 +775,10 @@ local function initAutoUseHack()
                     if hrp then
                         for _, prompt in ipairs(WS:GetDescendants()) do
                             if prompt:IsA("ProximityPrompt") then
-                                local actionText = string.lower(prompt.ActionText or "")
-                                local objectText = string.lower(prompt.ObjectText or "")
-                                if actionText:find("hack") or actionText:find("use")
-                                    or objectText:find("hack") or objectText:find("terminal") then
+                                local at = string.lower(prompt.ActionText or "")
+                                local ot = string.lower(prompt.ObjectText or "")
+                                if at:find("hack") or at:find("use")
+                                    or ot:find("hack") or ot:find("terminal") then
                                     local parent = prompt.Parent
                                     local pos = parent:IsA("BasePart") and parent.Position or nil
                                     if pos and (hrp.Position - pos).Magnitude < 15 then
@@ -810,43 +796,94 @@ local function initAutoUseHack()
     end)
 end
 
--- 启动新增模块
 initAutoPurchase()
 initAutoGrabTools()
 initAutoUseHack()
-ok("远程购买/工具模块已启动")
+ok("远程购买/工具")
 
--- ============================================================
--- 21. UI 构建
--- ============================================================
+-- ========== UI 主窗口 ==========
 local main = Instance.new("Frame", screen)
 main.Size = UDim2.new(0, 460, 0, 340)
 main.Position = UDim2.new(0.5, -230, 0.5, -170)
 main.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
-main.BackgroundTransparency = 0
+main.BackgroundTransparency = 0.15
 main.BorderSizePixel = 0
 main.ClipsDescendants = true
 main.Visible = false
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
 
-local mainBgGrad = Instance.new("UIGradient", main)
-mainBgGrad.Rotation = 135
-mainBgGrad.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 16, 38)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(14, 14, 20)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 12, 32)),
-})
+-- ========== 随机动漫背景 ==========
+local function tryLoadBg()
+    if not (game.HttpGet and writefile and getcustomasset) then return false end
+    local apis = {
+        { url = "https://api.waifu.pics/sfw/waifu", key = function(d) return d.url end },
+        { url = "https://nekos.best/api/v2/neko", key = function(d) return d.results and d.results[1] and d.results[1].url end },
+        { url = "https://api.waifu.im/search?included_tags=waifu", key = function(d) return d.images and d.images[1] and d.images[1].url end },
+    }
+    for _, api in ipairs(apis) do
+        local okReq, res = pcall(game.HttpGet, game, api.url)
+        if okReq and res and #res > 10 then
+            local okDec, data = pcall(HTTP.JSONDecode, HTTP, res)
+            if okDec and data then
+                local url = api.key(data)
+                if url and type(url) == "string" then
+                    local okImg, imgData = pcall(game.HttpGet, game, url)
+                    if okImg and imgData and #imgData > 1000 then
+                        local ext = url:match("%.(%w+)$") or "png"
+                        local fn = "xj_bg_" .. tostring(os.time()) .. "_" .. tostring(math.random(1, 99999)) .. "." .. ext
+                        pcall(writefile, fn, imgData)
+                        local okA, asset = pcall(getcustomasset, fn)
+                        if okA and asset then return asset end
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+task.spawn(function()
+    local asset = tryLoadBg()
+    if asset then
+        local bg = Instance.new("ImageLabel", main)
+        bg.Name = "XJ_Bg"
+        bg.Size = UDim2.new(1, 0, 1, 0)
+        bg.BackgroundTransparency = 1
+        bg.Image = asset
+        bg.ImageTransparency = 0.45
+        bg.ScaleType = Enum.ScaleType.Crop
+        bg.ZIndex = 0
+        local overlay = Instance.new("Frame", main)
+        overlay.Size = UDim2.new(1, 0, 1, 0)
+        overlay.BackgroundColor3 = Color3.fromRGB(8, 8, 14)
+        overlay.BackgroundTransparency = 0.45
+        overlay.BorderSizePixel = 0
+        overlay.ZIndex = 1
+        ok("随机动漫背景")
+    else
+        inf("背景 API 不可用 · 使用渐变兜底")
+        local grad = Instance.new("UIGradient", main)
+        grad.Rotation = 135
+        grad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 18, 48)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(14, 14, 20)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 15, 40)),
+        })
+    end
+end)
 
 local mainStroke = Instance.new("UIStroke", main)
 mainStroke.Color = Color3.fromRGB(168, 85, 247)
 mainStroke.Thickness = 1.5
+mainStroke.Transparency = 0.3
 
 -- 标题栏
 local topbar = Instance.new("Frame", main)
 topbar.Size = UDim2.new(1, 0, 0, 42)
 topbar.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
-topbar.BackgroundTransparency = 0.2
+topbar.BackgroundTransparency = 0.35
 topbar.BorderSizePixel = 0
+topbar.ZIndex = 2
 Instance.new("UICorner", topbar).CornerRadius = UDim.new(0, 14)
 
 local logo = Instance.new("Frame", topbar)
@@ -854,6 +891,7 @@ logo.Size = UDim2.new(0, 28, 0, 28)
 logo.Position = UDim2.new(0, 8, 0.5, -14)
 logo.BackgroundColor3 = Color3.new(1,1,1)
 logo.BorderSizePixel = 0
+logo.ZIndex = 3
 Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 7)
 local lg = Instance.new("UIGradient", logo)
 lg.Rotation = 45
@@ -862,12 +900,14 @@ local lTxt = Instance.new("TextLabel", logo)
 lTxt.Size = UDim2.new(1,0,1,0); lTxt.BackgroundTransparency = 1
 lTxt.Text = "嘉"; lTxt.TextColor3 = Color3.new(1,1,1)
 lTxt.Font = Enum.Font.GothamBlack; lTxt.TextSize = 15
+lTxt.ZIndex = 4
 
 local title = Instance.new("TextLabel", topbar)
 title.Size = UDim2.new(0, 200, 0, 16); title.Position = UDim2.new(0, 42, 0, 5)
 title.BackgroundTransparency = 1; title.Text = "XJ HUB 1.0"
 title.TextColor3 = Color3.new(1,1,1); title.Font = Enum.Font.GothamBold
 title.TextSize = 13; title.TextXAlignment = Enum.TextXAlignment.Left
+title.ZIndex = 3
 
 local sub = Instance.new("TextLabel", topbar)
 sub.Size = UDim2.new(0, 200, 0, 12); sub.Position = UDim2.new(0, 42, 0, 22)
@@ -876,6 +916,7 @@ sub.Text = "绕过 " .. selfCheck.bypass.score .. "/" .. selfCheck.bypass.total 
 sub.TextColor3 = (selfCheck.bypass.score == selfCheck.bypass.total) and Color3.fromRGB(120, 230, 150) or Color3.fromRGB(255, 200, 100)
 sub.Font = Enum.Font.Gotham; sub.TextSize = 9
 sub.TextXAlignment = Enum.TextXAlignment.Left
+sub.ZIndex = 3
 
 local blockDrag = false
 local minBtn = Instance.new("TextButton", topbar)
@@ -883,6 +924,7 @@ minBtn.Size = UDim2.new(0, 24, 0, 24); minBtn.Position = UDim2.new(1, -60, 0.5, 
 minBtn.BackgroundColor3 = Color3.fromRGB(251, 191, 36); minBtn.Text = "－"
 minBtn.TextColor3 = Color3.new(1,1,1); minBtn.Font = Enum.Font.GothamBold
 minBtn.TextSize = 15; minBtn.BorderSizePixel = 0
+minBtn.ZIndex = 3
 Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
 
 local closeBtn = Instance.new("TextButton", topbar)
@@ -890,6 +932,7 @@ closeBtn.Size = UDim2.new(0, 24, 0, 24); closeBtn.Position = UDim2.new(1, -30, 0
 closeBtn.BackgroundColor3 = Color3.fromRGB(239, 68, 68); closeBtn.Text = "×"
 closeBtn.TextColor3 = Color3.new(1,1,1); closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextSize = 17; closeBtn.BorderSizePixel = 0
+closeBtn.ZIndex = 3
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
 
 local function blockTopbarDrag(btn)
@@ -1036,8 +1079,9 @@ local sidebar = Instance.new("Frame", main)
 sidebar.Size = UDim2.new(0, 90, 1, -54)
 sidebar.Position = UDim2.new(0, 6, 0, 48)
 sidebar.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-sidebar.BackgroundTransparency = 0.2
+sidebar.BackgroundTransparency = 0.35
 sidebar.BorderSizePixel = 0
+sidebar.ZIndex = 2
 Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 8)
 
 local innerNav = Instance.new("ScrollingFrame", sidebar)
@@ -1046,6 +1090,7 @@ innerNav.BackgroundTransparency = 1; innerNav.BorderSizePixel = 0
 innerNav.ScrollBarThickness = 0
 innerNav.CanvasSize = UDim2.new(0, 0, 0, 0)
 innerNav.AutomaticCanvasSize = Enum.AutomaticSize.Y
+innerNav.ZIndex = 3
 local nl = Instance.new("UIListLayout", innerNav)
 nl.Padding = UDim.new(0, 2)
 local np = Instance.new("UIPadding", innerNav)
@@ -1056,8 +1101,9 @@ local content = Instance.new("Frame", main)
 content.Size = UDim2.new(1, -104, 1, -54)
 content.Position = UDim2.new(0, 98, 0, 48)
 content.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
-content.BackgroundTransparency = 0.2
+content.BackgroundTransparency = 0.35
 content.BorderSizePixel = 0
+content.ZIndex = 2
 Instance.new("UICorner", content).CornerRadius = UDim.new(0, 8)
 
 local pages, tabButtons = {}, {}
@@ -1074,6 +1120,7 @@ local function createPage(name)
     page.AutomaticCanvasSize = Enum.AutomaticSize.Y
     page.CanvasSize = UDim2.new(0, 0, 0, 0)
     page.Visible = false
+    page.ZIndex = 3
     local ll = Instance.new("UIListLayout", page)
     ll.Padding = UDim.new(0, 4)
     pages[name] = page
@@ -1090,6 +1137,7 @@ local function createTab(name, icon)
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.LayoutOrder = order
     btn.AutoButtonColor = false
+    btn.ZIndex = 3
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     local ico = Instance.new("TextLabel", btn)
     ico.Size = UDim2.new(0, 16, 1, 0); ico.Position = UDim2.new(0, 6, 0, 0)
@@ -1097,12 +1145,14 @@ local function createTab(name, icon)
     ico.TextColor3 = Color3.fromRGB(190, 190, 210)
     ico.Font = Enum.Font.GothamBold; ico.TextSize = 11
     ico.TextXAlignment = Enum.TextXAlignment.Center
+    ico.ZIndex = 4
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -24, 1, 0); lbl.Position = UDim2.new(0, 24, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = name
     lbl.TextColor3 = Color3.fromRGB(190, 190, 210)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
 
     tabButtons[name] = { btn = btn, lbl = lbl, ico = ico, order = order }
 
@@ -1125,9 +1175,10 @@ local function createToggle(parent, name, def, cb)
     local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, 0, 0, 32)
     btn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    btn.BackgroundTransparency = 0.1
+    btn.BackgroundTransparency = 0.15
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
+    btn.ZIndex = 3
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -56, 1, 0); lbl.Position = UDim2.new(0, 10, 0, 0)
@@ -1135,17 +1186,16 @@ local function createToggle(parent, name, def, cb)
     lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
     local ind = Instance.new("Frame", btn)
-    ind.Size = UDim2.new(0, 36, 0, 18)
-    ind.Position = UDim2.new(1, -44, 0.5, -9)
-    ind.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
-    ind.BorderSizePixel = 0
+    ind.Size = UDim2.new(0, 36, 0, 18); ind.Position = UDim2.new(1, -44, 0.5, -9)
+    ind.BackgroundColor3 = Color3.fromRGB(50, 50, 65); ind.BorderSizePixel = 0
+    ind.ZIndex = 4
     Instance.new("UICorner", ind).CornerRadius = UDim.new(1, 0)
     local knob = Instance.new("Frame", ind)
-    knob.Size = UDim2.new(0, 14, 0, 14)
-    knob.Position = UDim2.new(0, 2, 0.5, -7)
-    knob.BackgroundColor3 = Color3.new(1, 1, 1)
-    knob.BorderSizePixel = 0
+    knob.Size = UDim2.new(0, 14, 0, 14); knob.Position = UDim2.new(0, 2, 0.5, -7)
+    knob.BackgroundColor3 = Color3.new(1, 1, 1); knob.BorderSizePixel = 0
+    knob.ZIndex = 5
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
     local state = def or false
     local function refresh()
@@ -1167,8 +1217,9 @@ local function createSlider(parent, name, min, max, def, cb)
     local frame = Instance.new("Frame", parent)
     frame.Size = UDim2.new(1, 0, 0, 46)
     frame.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    frame.BackgroundTransparency = 0.1
+    frame.BackgroundTransparency = 0.15
     frame.BorderSizePixel = 0
+    frame.ZIndex = 3
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
     local lbl = Instance.new("TextLabel", frame)
     lbl.Size = UDim2.new(1, -56, 0, 14); lbl.Position = UDim2.new(0, 10, 0, 4)
@@ -1176,28 +1227,31 @@ local function createSlider(parent, name, min, max, def, cb)
     lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
     local vLbl = Instance.new("TextLabel", frame)
     vLbl.Size = UDim2.new(0, 46, 0, 14); vLbl.Position = UDim2.new(1, -56, 0, 4)
     vLbl.BackgroundTransparency = 1; vLbl.Text = tostring(def)
     vLbl.TextColor3 = Color3.fromRGB(190, 130, 255)
     vLbl.Font = Enum.Font.GothamBold; vLbl.TextSize = 12
     vLbl.TextXAlignment = Enum.TextXAlignment.Right
+    vLbl.ZIndex = 4
     local track = Instance.new("TextButton", frame)
     track.Size = UDim2.new(1, -20, 0, 6); track.Position = UDim2.new(0, 10, 0, 28)
     track.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
     track.Text = ""; track.BorderSizePixel = 0
     track.AutoButtonColor = false
+    track.ZIndex = 4
     Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
     local fill = Instance.new("Frame", track)
     fill.Size = UDim2.new((def - min) / (max - min), 0, 1, 0)
     fill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
     fill.BorderSizePixel = 0
+    fill.ZIndex = 5
     Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
     local dot = Instance.new("Frame", track)
-    dot.Size = UDim2.new(0, 12, 0, 12)
-    dot.Position = UDim2.new((def - min) / (max - min), -6, 0.5, -6)
-    dot.BackgroundColor3 = Color3.new(1, 1, 1)
-    dot.BorderSizePixel = 0
+    dot.Size = UDim2.new(0, 12, 0, 12); dot.Position = UDim2.new((def - min) / (max - min), -6, 0.5, -6)
+    dot.BackgroundColor3 = Color3.new(1, 1, 1); dot.BorderSizePixel = 0
+    dot.ZIndex = 6
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
     Instance.new("UIStroke", dot).Color = Color3.fromRGB(168, 85, 247)
     local dg = false
@@ -1226,9 +1280,10 @@ local function createDropdown(parent, name, options, defIdx, cb)
     local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, 0, 0, 32)
     btn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    btn.BackgroundTransparency = 0.1
+    btn.BackgroundTransparency = 0.15
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
+    btn.ZIndex = 3
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -100, 1, 0); lbl.Position = UDim2.new(0, 10, 0, 0)
@@ -1236,15 +1291,15 @@ local function createDropdown(parent, name, options, defIdx, cb)
     lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
     local vBox = Instance.new("TextButton", btn)
-    vBox.Size = UDim2.new(0, 84, 0, 22)
-    vBox.Position = UDim2.new(1, -92, 0.5, -11)
+    vBox.Size = UDim2.new(0, 84, 0, 22); vBox.Position = UDim2.new(1, -92, 0.5, -11)
     vBox.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
     vBox.Text = options[defIdx or 1]
     vBox.TextColor3 = Color3.fromRGB(235, 235, 245)
     vBox.Font = Enum.Font.Gotham; vBox.TextSize = 10
-    vBox.BorderSizePixel = 0
-    vBox.AutoButtonColor = false
+    vBox.BorderSizePixel = 0; vBox.AutoButtonColor = false
+    vBox.ZIndex = 4
     Instance.new("UICorner", vBox).CornerRadius = UDim.new(0, 5)
     local idx = defIdx or 1
     vBox.MouseButton1Click:Connect(function()
@@ -1280,12 +1335,13 @@ tabButtons["主页"].lbl.TextColor3 = Color3.new(1, 1, 1)
 tabButtons["主页"].ico.TextColor3 = Color3.new(1, 1, 1)
 tabButtons["主页"].btn.BackgroundTransparency = 0.75
 
--- 主页 - 玩家信息
+-- 主页
 local userCard = Instance.new("Frame", pHome)
 userCard.Size = UDim2.new(1, 0, 0, 70)
 userCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-userCard.BackgroundTransparency = 0.1
+userCard.BackgroundTransparency = 0.2
 userCard.BorderSizePixel = 0
+userCard.ZIndex = 3
 Instance.new("UICorner", userCard).CornerRadius = UDim.new(0, 7)
 
 local avatar = Instance.new("ImageLabel", userCard)
@@ -1294,6 +1350,7 @@ avatar.Position = UDim2.new(0, 8, 0.5, -27)
 avatar.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
 avatar.BorderSizePixel = 0
 avatar.Image = userInfo.thumb
+avatar.ZIndex = 4
 Instance.new("UICorner", avatar).CornerRadius = UDim.new(0, 27)
 local avStroke = Instance.new("UIStroke", avatar)
 avStroke.Color = Color3.fromRGB(168, 85, 247)
@@ -1301,60 +1358,54 @@ avStroke.Thickness = 2
 
 local nameLbl = Instance.new("TextLabel", userCard)
 nameLbl.Size = UDim2.new(1, -74, 0, 16); nameLbl.Position = UDim2.new(0, 70, 0, 8)
-nameLbl.BackgroundTransparency = 1
-nameLbl.Text = userInfo.name
-nameLbl.TextColor3 = Color3.new(1, 1, 1)
-nameLbl.Font = Enum.Font.GothamBold
-nameLbl.TextSize = 13
-nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+nameLbl.BackgroundTransparency = 1; nameLbl.Text = userInfo.name
+nameLbl.TextColor3 = Color3.new(1, 1, 1); nameLbl.Font = Enum.Font.GothamBold
+nameLbl.TextSize = 13; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+nameLbl.ZIndex = 4
 
 local infoLbl = Instance.new("TextLabel", userCard)
 infoLbl.Size = UDim2.new(1, -74, 0, 12); infoLbl.Position = UDim2.new(0, 70, 0, 26)
 infoLbl.BackgroundTransparency = 1
 infoLbl.Text = "@" .. userInfo.displayName .. " · " .. userInfo.membership
-infoLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
-infoLbl.Font = Enum.Font.Gotham
-infoLbl.TextSize = 10
-infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+infoLbl.TextColor3 = Color3.fromRGB(180, 180, 200); infoLbl.Font = Enum.Font.Gotham
+infoLbl.TextSize = 10; infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+infoLbl.ZIndex = 4
 
 local memberLbl = Instance.new("TextLabel", userCard)
 memberLbl.Size = UDim2.new(1, -74, 0, 12); memberLbl.Position = UDim2.new(0, 70, 0, 40)
 memberLbl.BackgroundTransparency = 1
 memberLbl.Text = "ID: " .. userInfo.userId .. " · 账号 " .. userInfo.accountAge .. " 天"
-memberLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
-memberLbl.Font = Enum.Font.Gotham
-memberLbl.TextSize = 10
-memberLbl.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl.TextColor3 = Color3.fromRGB(180, 180, 200); memberLbl.Font = Enum.Font.Gotham
+memberLbl.TextSize = 10; memberLbl.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl.ZIndex = 4
 
 local memberLbl2 = Instance.new("TextLabel", userCard)
 memberLbl2.Size = UDim2.new(1, -74, 0, 12); memberLbl2.Position = UDim2.new(0, 70, 0, 54)
 memberLbl2.BackgroundTransparency = 1
 memberLbl2.Text = "队伍: " .. teamLabel(LP) .. " · 玩家 " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
-memberLbl2.TextColor3 = Color3.fromRGB(190, 130, 255)
-memberLbl2.Font = Enum.Font.Gotham
-memberLbl2.TextSize = 10
-memberLbl2.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl2.TextColor3 = Color3.fromRGB(190, 130, 255); memberLbl2.Font = Enum.Font.Gotham
+memberLbl2.TextSize = 10; memberLbl2.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl2.ZIndex = 4
 
 -- 数据卡
 local statsCard = Instance.new("Frame", pHome)
 statsCard.Size = UDim2.new(1, 0, 0, 60)
 statsCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-statsCard.BackgroundTransparency = 0.1
+statsCard.BackgroundTransparency = 0.2
 statsCard.BorderSizePixel = 0
+statsCard.ZIndex = 3
 Instance.new("UICorner", statsCard).CornerRadius = UDim.new(0, 7)
 
 local statsTitle = Instance.new("TextLabel", statsCard)
 statsTitle.Size = UDim2.new(1, -20, 0, 16); statsTitle.Position = UDim2.new(0, 10, 0, 5)
-statsTitle.BackgroundTransparency = 1
-statsTitle.Text = "📊 实时数据"
-statsTitle.TextColor3 = Color3.fromRGB(150, 200, 255)
-statsTitle.Font = Enum.Font.GothamBold
-statsTitle.TextSize = 11
-statsTitle.TextXAlignment = Enum.TextXAlignment.Left
+statsTitle.BackgroundTransparency = 1; statsTitle.Text = "📊 实时数据"
+statsTitle.TextColor3 = Color3.fromRGB(150, 200, 255); statsTitle.Font = Enum.Font.GothamBold
+statsTitle.TextSize = 11; statsTitle.TextXAlignment = Enum.TextXAlignment.Left
+statsTitle.ZIndex = 4
 
 local statsRow = Instance.new("Frame", statsCard)
 statsRow.Size = UDim2.new(1, -20, 0, 32); statsRow.Position = UDim2.new(0, 10, 0, 22)
-statsRow.BackgroundTransparency = 1
+statsRow.BackgroundTransparency = 1; statsRow.ZIndex = 4
 local srl = Instance.new("UIListLayout", statsRow)
 srl.FillDirection = Enum.FillDirection.Horizontal
 srl.Padding = UDim.new(0, 5)
@@ -1363,18 +1414,18 @@ local function makeStatCell(parent, label, color)
     local cell = Instance.new("Frame", parent)
     cell.Size = UDim2.new(1/3, -4, 1, 0)
     cell.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
-    cell.BorderSizePixel = 0
+    cell.BorderSizePixel = 0; cell.ZIndex = 4
     Instance.new("UICorner", cell).CornerRadius = UDim.new(0, 5)
     local t = Instance.new("TextLabel", cell)
     t.Size = UDim2.new(1, 0, 0, 10); t.Position = UDim2.new(0, 0, 0, 2)
     t.BackgroundTransparency = 1; t.Text = label
     t.TextColor3 = Color3.fromRGB(150, 150, 180)
-    t.Font = Enum.Font.Gotham; t.TextSize = 8
+    t.Font = Enum.Font.Gotham; t.TextSize = 8; t.ZIndex = 5
     local v = Instance.new("TextLabel", cell)
     v.Size = UDim2.new(1, 0, 0, 16); v.Position = UDim2.new(0, 0, 0, 12)
     v.BackgroundTransparency = 1; v.Text = "0"
     v.TextColor3 = color
-    v.Font = Enum.Font.GothamBold; v.TextSize = 12
+    v.Font = Enum.Font.GothamBold; v.TextSize = 12; v.ZIndex = 5
     return v
 end
 
@@ -1412,11 +1463,16 @@ createToggle(pCombat, "杀戮光环", false, function(v) S.auraEnabled = v end)
 createSlider(pCombat, "光环范围", 50, 800, 200, function(v) S.auraRange = v end)
 createSlider(pCombat, "光环伤害", 1, 100, 5, function(v) S.auraDamage = v end)
 createToggle(pCombat, "拟人化延迟", true, function(v) S.auraHumanize = v end)
+createToggle(pCombat, "静默模式", false, function(v) S.auraSilent = v end)
 createToggle(pCombat, "自动铐", false, function(v) S.autoCuff = v end)
 
 createToggle(pAim, "开启自瞄（右键触发）", false, function(v) S.aimbot.enabled = v end)
 createToggle(pAim, "显示 FOV 圈", true, function(v) S.aimbot.showFov = v end)
 createToggle(pAim, "显示追踪线", false, function(v) S.aimbot.showTracer = v end)
+createToggle(pAim, "好友检测", false, function(v) S.aimbot.friendCheck = v end)
+createToggle(pAim, "墙壁检测", false, function(v) S.aimbot.wallCheck = v end)
+createToggle(pAim, "队伍检测", false, function(v) S.aimbot.teamCheck = v end)
+createToggle(pAim, "船员检测", false, function(v) S.aimbot.crewCheck = v end)
 createDropdown(pAim, "FOV 颜色", {"红色", "绿色", "蓝色", "紫色", "白色"}, 1, function(v) S.aimbot.color = v end)
 createDropdown(pAim, "瞄准部位", {"头部", "胸部"}, 1, function(v) S.aimbot.targetPart = v end)
 createSlider(pAim, "FOV 大小", 20, 400, 120, function(v) S.aimbot.fov = v end)
@@ -1456,9 +1512,7 @@ createToggle(pMisc, "防越狱拉回", false, function(v) S.antiPrisonPull = v e
 
 ok("UI 构建完成")
 
--- ============================================================
--- 22. 加载动画
--- ============================================================
+-- ========== 加载动画 ==========
 local loading = Instance.new("Frame", screen)
 loading.Size = UDim2.new(1, 0, 1, 0)
 loading.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -1493,36 +1547,28 @@ lLogoTxt.ZIndex = 103
 
 local lTitle = Instance.new("TextLabel", lCard)
 lTitle.Size = UDim2.new(1, 0, 0, 14); lTitle.Position = UDim2.new(0, 0, 0, 62)
-lTitle.BackgroundTransparency = 1
-lTitle.Text = "XJ HUB 1.0 beta"
-lTitle.TextColor3 = Color3.new(1, 1, 1)
-lTitle.Font = Enum.Font.GothamBold
-lTitle.TextSize = 12
-lTitle.ZIndex = 102
+lTitle.BackgroundTransparency = 1; lTitle.Text = "XJ HUB 1.0 beta"
+lTitle.TextColor3 = Color3.new(1, 1, 1); lTitle.Font = Enum.Font.GothamBold
+lTitle.TextSize = 12; lTitle.ZIndex = 102
 
 local lBarBg = Instance.new("Frame", lCard)
 lBarBg.Size = UDim2.new(1, -36, 0, 4); lBarBg.Position = UDim2.new(0, 18, 0, 86)
 lBarBg.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-lBarBg.BorderSizePixel = 0
-lBarBg.ZIndex = 102
+lBarBg.BorderSizePixel = 0; lBarBg.ZIndex = 102
 Instance.new("UICorner", lBarBg).CornerRadius = UDim.new(1, 0)
 
 local lBarFill = Instance.new("Frame", lBarBg)
 lBarFill.Size = UDim2.new(0, 0, 1, 0)
 lBarFill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
-lBarFill.BorderSizePixel = 0
-lBarFill.ZIndex = 103
+lBarFill.BorderSizePixel = 0; lBarFill.ZIndex = 103
 Instance.new("UICorner", lBarFill).CornerRadius = UDim.new(1, 0)
 
 local lStatus = Instance.new("TextLabel", lCard)
 lStatus.Size = UDim2.new(1, -36, 0, 14); lStatus.Position = UDim2.new(0, 18, 0, 98)
-lStatus.BackgroundTransparency = 1
-lStatus.Text = "初始化..."
+lStatus.BackgroundTransparency = 1; lStatus.Text = "初始化..."
 lStatus.TextColor3 = Color3.fromRGB(200, 200, 220)
-lStatus.Font = Enum.Font.GothamMedium
-lStatus.TextSize = 9
-lStatus.TextXAlignment = Enum.TextXAlignment.Left
-lStatus.ZIndex = 102
+lStatus.Font = Enum.Font.GothamMedium; lStatus.TextSize = 9
+lStatus.TextXAlignment = Enum.TextXAlignment.Left; lStatus.ZIndex = 102
 
 task.spawn(function()
     lStatus.Text = "初始化..."
@@ -1553,4 +1599,3 @@ end)
 
 ok("加载完成")
 inf("========== XJ Hub 启动完毕 ==========")
-inf("环境: " .. selfCheck.env.score .. "/" .. selfCheck.env.total .. " · 绕过: " .. selfCheck.bypass.score .. "/" .. selfCheck.bypass.total)
