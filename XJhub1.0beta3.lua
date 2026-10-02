@@ -1,5 +1,5 @@
 -- ============================================================
--- XJ Hub 1.0 beta · 圆环 ESP + 底层优化版
+-- XJ Hub 1.0 beta · 优化整合版
 -- 作者: 嘉酱
 -- ============================================================
 
@@ -9,6 +9,7 @@ local RunSvc  = game:GetService("RunService")
 local UIS     = game:GetService("UserInputService")
 local Tween   = game:GetService("TweenService")
 local WS      = game:GetService("Workspace")
+local HTTP    = game:GetService("HttpService")
 local LP      = Players.LocalPlayer
 
 local function ok(m)  print("[XJ] ✅ " .. m) end
@@ -35,13 +36,12 @@ local S = {
     stamina = false, food = false, infiniteAmmo = false, rapidFire = false,
     speedEnabled = false, speedValue = 100,
     jumpEnabled = false, jumpPower = 50, jumpMultiplier = 1, infiniteJump = false,
-    auraEnabled = false, auraRange = 200, auraDamage = 5,
-    auraHumanize = true, auraSilent = false,
+    auraEnabled = false, auraRange = 200, auraDamage = 5, auraHumanize = true, auraSilent = false,
     autoCuff = false, rageEnabled = false, rageRange = 300, combatBlock = false,
     aimbot = { enabled = false, fov = 120, smoothness = 0.3, showFov = true,
                showTracer = false, color = "红色", keyHeld = false, targetPart = "头部" },
     esp = { enabled = false, name = true, distance = true, health = true,
-            team = true, highlight = true, ring = true, colorByTeam = true },
+            team = true, highlight = true, bar = true, colorByTeam = true },
     autoMoney = false, autoFarmer = false, autoMission = false, autoHack = false,
     flyEnabled = false, flySpeed = 50, noclip = false,
     ghost = false, noRagdoll = false, noFallDamage = false, antiPrisonPull = false,
@@ -63,13 +63,41 @@ local function checkBypass(name, fn)
     else no("[绕过] " .. name .. " : " .. tostring(err)) end
 end
 
+-- 环境
 checkEnv("loadstring", function() if not loadstring then error() end end)
 checkEnv("getgc", function() if not getgc then error() end end)
 checkEnv("fireproximityprompt", function() if not fireproximityprompt then error() end end)
 checkEnv("Drawing", function() if not Drawing or not Drawing.new then error() end end)
 checkEnv("gethui", function() if not gethui then error() end end)
+checkEnv("writefile/getcustomasset", function()
+    if not writefile then error("无 writefile") end
+end)
 
-checkBypass("AntiCheat 表替换", function()
+-- ========== 绕过（隐蔽强化版） ==========
+-- 1. debug.info/getinfo 伪装（隐藏执行器特征）
+checkBypass("debug 伪装", function()
+    if type(debug) == "table" and debug.info then
+        local origInfo = debug.info
+        debug.info = function(...)
+            local ok2, r = pcall(origInfo, ...)
+            if ok2 then return r end
+            return "C"
+        end
+    end
+end)
+
+-- 2. warn 过滤（屏蔽 exploit/cheat/hack 关键词）
+checkBypass("warn 过滤", function()
+    local oldWarn = warn
+    _G.warn = function(...)
+        local msg = tostring((...))
+        if msg:lower():find("exploit") or msg:lower():find("cheat") or msg:lower():find("hack") then return end
+        oldWarn(...)
+    end
+end)
+
+-- 3. AntiCheat 表替换
+checkBypass("AntiCheat 包裹", function()
     local ac = RS:FindFirstChild("AntiCheat", true)
     if ac and type(ac) == "table" then
         for k, v in pairs(ac) do
@@ -84,6 +112,7 @@ checkBypass("AntiCheat 表替换", function()
     end
 end)
 
+-- 4. Ratchet 补丁
 checkBypass("Ratchet 补丁", function()
     local Ratchet = require(RS:FindFirstChild("Ratchet", true))
     local Sha256  = require(RS:FindFirstChild("Sha256", true))
@@ -100,6 +129,7 @@ checkBypass("Ratchet 补丁", function()
     end
 end)
 
+-- 5. Ragdoll 补丁
 checkBypass("Ragdoll 补丁", function()
     local Ragdoll = require(RS.Modules.Ragdoll)
     local a = Ragdoll.activate
@@ -109,14 +139,25 @@ checkBypass("Ragdoll 补丁", function()
     end
 end)
 
+-- 6. 上报远程清理（名字含 report/exploit 的远程）
 checkBypass("上报远程清理", function()
     local remote = RS:FindFirstChild("Remote", true)
     if remote then
         for _, c in ipairs(remote:GetChildren()) do
             local n = c.Name:lower()
-            if n:find("report") or n:find("exploitlog") then
+            if n:find("report") or n:find("exploit") or n:find("log") and not n:find("dialog") then
                 pcall(function() c:Destroy() end)
             end
+        end
+    end
+end)
+
+-- 7. 全局环境伪装（部分执行器）
+checkBypass("环境指纹隐藏", function()
+    if getgenv then
+        local genv = getgenv()
+        if genv then
+            genv.__XJ_LOADED = true
         end
     end
 end)
@@ -188,7 +229,73 @@ local userInfo = {
     membership = tostring(LP.MembershipType):gsub("Enum.MembershipType%.", ""),
     thumb = "rbxthumb://type=AvatarHeadShot&id=" .. LP.UserId .. "&w=150&h=150",
 }
-ok("玩家: " .. userInfo.name)
+
+-- ========== 随机动漫背景 ==========
+local bgImage = nil
+local function tryLoadAnimeBg(parent)
+    if not (game.HttpGet and writefile and getcustomasset) then return false end
+    local apis = {
+        { url = "https://api.waifu.pics/sfw/waifu", key = function(d) return d.url end },
+        { url = "https://nekos.best/api/v2/neko", key = function(d) return d.results and d.results[1] and d.results[1].url end },
+        { url = "https://api.waifu.im/search?included_tags=waifu", key = function(d) return d.images and d.images[1] and d.images[1].url end },
+    }
+    for _, api in ipairs(apis) do
+        local okReq, res = pcall(game.HttpGet, game, api.url)
+        if okReq and res and #res > 10 then
+            local okDec, data = pcall(HTTP.JSONDecode, HTTP, res)
+            if okDec and data then
+                local url = api.key(data)
+                if url and type(url) == "string" then
+                    local okImg, imgData = pcall(game.HttpGet, game, url)
+                    if okImg and imgData and #imgData > 1000 then
+                        local ext = url:match("%.(%w+)$") or "png"
+                        local fn = "xj_bg_" .. tostring(os.time()) .. "_" .. tostring(math.random(1, 99999)) .. "." .. ext
+                        pcall(writefile, fn, imgData)
+                        local okA, asset = pcall(getcustomasset, fn)
+                        if okA and asset then
+                            return asset
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function applyBg(parent)
+    local asset = tryLoadAnimeBg(parent)
+    if asset then
+        local bg = Instance.new("ImageLabel", parent)
+        bg.Name = "XJ_Bg"
+        bg.Size = UDim2.new(1, 0, 1, 0)
+        bg.BackgroundTransparency = 1
+        bg.Image = asset
+        bg.ImageTransparency = 0.45
+        bg.ScaleType = Enum.ScaleType.Crop
+        bg.ZIndex = 0
+        bgImage = bg
+        -- 暗色蒙版
+        local overlay = Instance.new("Frame", parent)
+        overlay.Name = "XJ_Overlay"
+        overlay.Size = UDim2.new(1, 0, 1, 0)
+        overlay.BackgroundColor3 = Color3.fromRGB(8, 8, 14)
+        overlay.BackgroundTransparency = 0.4
+        overlay.BorderSizePixel = 0
+        overlay.ZIndex = 1
+        ok("随机动漫背景已加载")
+    else
+        -- 用渐变兜底
+        local grad = Instance.new("UIGradient", parent)
+        grad.Rotation = 135
+        grad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 18, 48)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(14, 14, 20)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 15, 40)),
+        })
+        inf("背景 API 不可用 · 使用渐变兜底")
+    end
+end
 
 -- ========== 渲染循环 ==========
 local PART_MAP = { ["头部"] = {"Head"}, ["胸部"] = {"UpperTorso", "Torso"} }
@@ -532,114 +639,52 @@ end)
 ok("核心模块")
 
 -- ============================================================
--- 【新 ESP】圆环血量 + 中间数字 + 队伍标签在圈上方
+-- ESP（简化版：名字 + 距离/血量 + 小血条 + 高亮）
 -- ============================================================
 local espCache = {}
 
 local function buildESP(p, char, hrp)
-    -- Billboard 主容器（比头像大一圈给血量环 + 标签留空间）
     local bill = Instance.new("BillboardGui")
     bill.Name = "XJ_ESP_" .. p.Name
     bill.AlwaysOnTop = true
-    bill.Size = UDim2.new(0, 120, 0, 120)
-    bill.StudsOffset = Vector3.new(0, 3, 0)
+    bill.Size = UDim2.new(0, 120, 0, 34)
+    bill.StudsOffset = Vector3.new(0, 3.2, 0)
     bill.MaxDistance = 1500
     bill.Adornee = hrp
     bill.Parent = screen
 
-    -- 队伍标签容器（圈上方）
-    local teamBox = Instance.new("Frame", bill)
-    teamBox.Name = "TeamBox"
-    teamBox.Size = UDim2.new(0, 80, 0, 16)
-    teamBox.Position = UDim2.new(0.5, -40, 0, 6)
-    teamBox.BackgroundColor3 = Color3.fromRGB(16, 16, 24)
-    teamBox.BackgroundTransparency = 0.15
-    teamBox.BorderSizePixel = 0
-    Instance.new("UICorner", teamBox).CornerRadius = UDim.new(1, 0)
-    local teamStroke = Instance.new("UIStroke", teamBox)
-    teamStroke.Name = "Stroke"
-    teamStroke.Color = Color3.fromRGB(168, 85, 247)
-    teamStroke.Thickness = 1
-    teamStroke.Transparency = 0.3
+    -- 名字
+    local l1 = Instance.new("TextLabel", bill)
+    l1.Size = UDim2.new(1, 0, 0, 14); l1.Position = UDim2.new(0, 0, 0, 0)
+    l1.BackgroundTransparency = 1; l1.Font = Enum.Font.GothamBold
+    l1.TextSize = 12; l1.TextColor3 = Color3.new(1,1,1)
+    l1.TextStrokeTransparency = 0; l1.TextStrokeColor3 = Color3.new(0,0,0)
 
-    local teamLbl = Instance.new("TextLabel", teamBox)
-    teamLbl.Name = "Label"
-    teamLbl.Size = UDim2.new(1, 0, 1, 0)
-    teamLbl.BackgroundTransparency = 1
-    teamLbl.Font = Enum.Font.GothamBold
-    teamLbl.TextSize = 10
-    teamLbl.TextColor3 = Color3.new(1, 1, 1)
-    teamLbl.Text = ""
+    -- 距离 + 血量
+    local l2 = Instance.new("TextLabel", bill)
+    l2.Size = UDim2.new(1, 0, 0, 12); l2.Position = UDim2.new(0, 0, 0, 15)
+    l2.BackgroundTransparency = 1; l2.Font = Enum.Font.GothamBold
+    l2.TextSize = 10; l2.TextColor3 = Color3.fromRGB(230,230,230)
+    l2.TextStrokeTransparency = 0; l2.TextStrokeColor3 = Color3.new(0,0,0)
 
-    -- 血量圆环容器（居中）
-    local ringBox = Instance.new("Frame", bill)
-    ringBox.Name = "RingBox"
-    ringBox.Size = UDim2.new(0, 52, 0, 52)
-    ringBox.Position = UDim2.new(0.5, -26, 0.5, -18)
-    ringBox.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
-    ringBox.BackgroundTransparency = 0.15
-    ringBox.BorderSizePixel = 0
-    Instance.new("UICorner", ringBox).CornerRadius = UDim.new(1, 0)
-
-    -- 外圈（血量环 - UIStroke）
-    local ringStroke = Instance.new("UIStroke", ringBox)
-    ringStroke.Name = "Ring"
-    ringStroke.Color = Color3.fromRGB(60, 220, 100)
-    ringStroke.Thickness = 4
-    ringStroke.Transparency = 0
-    ringStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
-    -- 内圈装饰线
-    local innerRing = Instance.new("Frame", ringBox)
-    innerRing.Name = "InnerRing"
-    innerRing.Size = UDim2.new(0, 44, 0, 44)
-    innerRing.Position = UDim2.new(0.5, -22, 0.5, -22)
-    innerRing.BackgroundTransparency = 1
-    innerRing.BorderSizePixel = 0
-    Instance.new("UICorner", innerRing).CornerRadius = UDim.new(1, 0)
-    local innerStroke = Instance.new("UIStroke", innerRing)
-    innerStroke.Name = "Stroke"
-    innerStroke.Color = Color3.fromRGB(80, 80, 100)
-    innerStroke.Thickness = 1
-    innerStroke.Transparency = 0.6
-
-    -- 血量数字（居中）
-    local hpNum = Instance.new("TextLabel", ringBox)
-    hpNum.Name = "HpNum"
-    hpNum.Size = UDim2.new(1, 0, 1, 0)
-    hpNum.BackgroundTransparency = 1
-    hpNum.Font = Enum.Font.GothamBold
-    hpNum.TextSize = 16
-    hpNum.TextColor3 = Color3.new(1, 1, 1)
-    hpNum.TextStrokeTransparency = 0.5
-    hpNum.Text = "100"
-
-    -- 距离标签（圈下方）
-    local distLbl = Instance.new("TextLabel", bill)
-    distLbl.Name = "Dist"
-    distLbl.Size = UDim2.new(0, 80, 0, 14)
-    distLbl.Position = UDim2.new(0.5, -40, 1, -18)
-    distLbl.BackgroundTransparency = 1
-    distLbl.Font = Enum.Font.Gotham
-    distLbl.TextSize = 10
-    distLbl.TextColor3 = Color3.fromRGB(220, 220, 240)
-    distLbl.TextStrokeTransparency = 0.3
-    distLbl.TextStrokeColor3 = Color3.new(0, 0, 0)
-    distLbl.Text = ""
+    -- 小血条（2px 高）
+    local hpBg = Instance.new("Frame", bill)
+    hpBg.Size = UDim2.new(1, -14, 0, 2); hpBg.Position = UDim2.new(0, 7, 1, -2)
+    hpBg.BackgroundColor3 = Color3.fromRGB(20,20,30); hpBg.BackgroundTransparency = 0.2
+    hpBg.BorderSizePixel = 0
+    Instance.new("UICorner", hpBg).CornerRadius = UDim.new(1, 0)
+    local hpFill = Instance.new("Frame", hpBg)
+    hpFill.Size = UDim2.new(1, 0, 1, 0); hpFill.BackgroundColor3 = Color3.fromRGB(60,220,100)
+    hpFill.BorderSizePixel = 0
+    Instance.new("UICorner", hpFill).CornerRadius = UDim.new(1, 0)
 
     -- 高亮
     local hl = Instance.new("Highlight", char)
-    hl.Name = "XJ_HL"
-    hl.Adornee = char
-    hl.FillTransparency = 0.88
-    hl.OutlineTransparency = 0
+    hl.Name = "XJ_HL"; hl.Adornee = char
+    hl.FillTransparency = 0.85; hl.OutlineTransparency = 0
     pcall(function() hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
 
-    return {
-        bill = bill, teamBox = teamBox, teamStroke = teamStroke, teamLbl = teamLbl,
-        ringBox = ringBox, ringStroke = ringStroke, hpNum = hpNum,
-        distLbl = distLbl, hl = hl,
-    }
+    return { bill = bill, line1 = l1, line2 = l2, hpBg = hpBg, hpFill = hpFill, hl = hl }
 end
 
 task.spawn(function()
@@ -656,48 +701,33 @@ task.spawn(function()
                             if e and e.bill then
                                 e.bill.Adornee = r
                                 local tc = S.esp.colorByTeam and teamColor(p) or Color3.fromRGB(168, 85, 247)
-                                local hp = math.clamp(h.Health / h.MaxHealth, 0, 1)
-                                local hpPct = math.floor(hp * 100)
 
-                                -- 队伍标签
-                                if S.esp.team then
-                                    e.teamBox.Visible = true
-                                    e.teamLbl.Text = teamLabel(p)
-                                    e.teamStroke.Color = tc
-                                else
-                                    e.teamBox.Visible = false
-                                end
+                                -- 名字
+                                local n = p.Name
+                                if S.esp.team then n = "[" .. teamLabel(p) .. "] " .. n end
+                                e.line1.Text = n
+                                e.line1.TextColor3 = tc
+                                e.line1.Visible = S.esp.name
 
-                                -- 圆环颜色按血量
-                                local ringColor
-                                if hp > 0.6 then ringColor = Color3.fromRGB(60, 220, 100)
-                                elseif hp > 0.3 then ringColor = Color3.fromRGB(255, 200, 0)
-                                else ringColor = Color3.fromRGB(255, 60, 60) end
-
-                                -- 血量数字
-                                if S.esp.health then
-                                    e.hpNum.Text = tostring(hpPct)
-                                    e.hpNum.TextColor3 = ringColor
-                                    e.hpNum.Visible = true
-                                else
-                                    e.hpNum.Visible = false
-                                end
-
-                                -- 圆环（整体颜色 + 透明度表示血量）
-                                e.ringStroke.Color = ringColor
-                                e.ringStroke.Thickness = 4
-                                e.ringStroke.Transparency = math.clamp(1 - hp * 0.9, 0, 1)
-
-                                -- 距离
+                                -- 距离 + 血量
+                                local parts = {}
                                 if S.esp.distance then
                                     local _, _, mr = getChar()
-                                    if mr then
-                                        e.distLbl.Text = math.floor((mr.Position - r.Position).Magnitude) .. "m"
-                                        e.distLbl.Visible = true
-                                    end
-                                else
-                                    e.distLbl.Visible = false
+                                    if mr then table.insert(parts, math.floor((mr.Position - r.Position).Magnitude) .. "m") end
                                 end
+                                if S.esp.health then table.insert(parts, math.floor(h.Health) .. "/" .. math.floor(h.MaxHealth)) end
+                                e.line2.Text = table.concat(parts, " · ")
+                                e.line2.Visible = S.esp.distance or S.esp.health
+
+                                -- 小血条
+                                if S.esp.bar then
+                                    e.hpBg.Visible = true
+                                    e.hpFill.Size = UDim2.new(math.clamp(h.Health / h.MaxHealth, 0, 1), 0, 1, 0)
+                                    local hp = h.Health / h.MaxHealth
+                                    if hp > 0.6 then e.hpFill.BackgroundColor3 = Color3.fromRGB(60, 220, 100)
+                                    elseif hp > 0.3 then e.hpFill.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
+                                    else e.hpFill.BackgroundColor3 = Color3.fromRGB(255, 60, 60) end
+                                else e.hpBg.Visible = false end
 
                                 -- 高亮
                                 if e.hl then
@@ -737,7 +767,7 @@ task.spawn(function()
         task.wait(0.1)
     end
 end)
-ok("ESP（圆环血量 + 队伍标签）")
+ok("ESP（简化版）")
 
 -- ============================================================
 -- UI 构建
@@ -746,30 +776,27 @@ local main = Instance.new("Frame", screen)
 main.Size = UDim2.new(0, 460, 0, 340)
 main.Position = UDim2.new(0.5, -230, 0.5, -170)
 main.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
-main.BackgroundTransparency = 0
+main.BackgroundTransparency = 0.15
 main.BorderSizePixel = 0
 main.ClipsDescendants = true
 main.Visible = false
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
 
-local mainBgGrad = Instance.new("UIGradient", main)
-mainBgGrad.Rotation = 135
-mainBgGrad.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 16, 38)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(14, 14, 20)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 12, 32)),
-})
+-- 随机动漫背景（放入 main）
+applyBg(main)
 
 local mainStroke = Instance.new("UIStroke", main)
 mainStroke.Color = Color3.fromRGB(168, 85, 247)
 mainStroke.Thickness = 1.5
+mainStroke.Transparency = 0.3
 
 -- 标题栏
 local topbar = Instance.new("Frame", main)
 topbar.Size = UDim2.new(1, 0, 0, 42)
 topbar.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
-topbar.BackgroundTransparency = 0.2
+topbar.BackgroundTransparency = 0.35
 topbar.BorderSizePixel = 0
+topbar.ZIndex = 2
 Instance.new("UICorner", topbar).CornerRadius = UDim.new(0, 14)
 
 local logo = Instance.new("Frame", topbar)
@@ -777,6 +804,7 @@ logo.Size = UDim2.new(0, 28, 0, 28)
 logo.Position = UDim2.new(0, 8, 0.5, -14)
 logo.BackgroundColor3 = Color3.new(1,1,1)
 logo.BorderSizePixel = 0
+logo.ZIndex = 3
 Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 7)
 local lg = Instance.new("UIGradient", logo)
 lg.Rotation = 45
@@ -785,12 +813,14 @@ local lTxt = Instance.new("TextLabel", logo)
 lTxt.Size = UDim2.new(1,0,1,0); lTxt.BackgroundTransparency = 1
 lTxt.Text = "嘉"; lTxt.TextColor3 = Color3.new(1,1,1)
 lTxt.Font = Enum.Font.GothamBlack; lTxt.TextSize = 15
+lTxt.ZIndex = 4
 
 local title = Instance.new("TextLabel", topbar)
 title.Size = UDim2.new(0, 200, 0, 16); title.Position = UDim2.new(0, 42, 0, 5)
 title.BackgroundTransparency = 1; title.Text = "XJ HUB 1.0"
 title.TextColor3 = Color3.new(1,1,1); title.Font = Enum.Font.GothamBold
 title.TextSize = 13; title.TextXAlignment = Enum.TextXAlignment.Left
+title.ZIndex = 3
 
 local sub = Instance.new("TextLabel", topbar)
 sub.Size = UDim2.new(0, 200, 0, 12); sub.Position = UDim2.new(0, 42, 0, 22)
@@ -799,6 +829,7 @@ sub.Text = "绕过 " .. selfCheck.bypass.score .. "/" .. selfCheck.bypass.total 
 sub.TextColor3 = (selfCheck.bypass.score == selfCheck.bypass.total) and Color3.fromRGB(120, 230, 150) or Color3.fromRGB(255, 200, 100)
 sub.Font = Enum.Font.Gotham; sub.TextSize = 9
 sub.TextXAlignment = Enum.TextXAlignment.Left
+sub.ZIndex = 3
 
 local blockDrag = false
 local minBtn = Instance.new("TextButton", topbar)
@@ -806,6 +837,7 @@ minBtn.Size = UDim2.new(0, 24, 0, 24); minBtn.Position = UDim2.new(1, -60, 0.5, 
 minBtn.BackgroundColor3 = Color3.fromRGB(251, 191, 36); minBtn.Text = "－"
 minBtn.TextColor3 = Color3.new(1,1,1); minBtn.Font = Enum.Font.GothamBold
 minBtn.TextSize = 15; minBtn.BorderSizePixel = 0
+minBtn.ZIndex = 3
 Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
 
 local closeBtn = Instance.new("TextButton", topbar)
@@ -813,6 +845,7 @@ closeBtn.Size = UDim2.new(0, 24, 0, 24); closeBtn.Position = UDim2.new(1, -30, 0
 closeBtn.BackgroundColor3 = Color3.fromRGB(239, 68, 68); closeBtn.Text = "×"
 closeBtn.TextColor3 = Color3.new(1,1,1); closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextSize = 17; closeBtn.BorderSizePixel = 0
+closeBtn.ZIndex = 3
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
 
 local function blockTopbarDrag(btn)
@@ -855,41 +888,27 @@ isAvatar.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
 isAvatar.BorderSizePixel = 0
 isAvatar.Image = userInfo.thumb
 Instance.new("UICorner", isAvatar).CornerRadius = UDim.new(1, 0)
-local isAvStroke = Instance.new("UIStroke", isAvatar)
-isAvStroke.Color = Color3.fromRGB(168, 85, 247)
-isAvStroke.Thickness = 1.2
 
 local isTitle = Instance.new("TextLabel", island)
-isTitle.Size = UDim2.new(1, -80, 0, 12)
-isTitle.Position = UDim2.new(0, 34, 0, 4)
-isTitle.BackgroundTransparency = 1
-isTitle.Text = "XJ Hub"
-isTitle.TextColor3 = Color3.new(1, 1, 1)
-isTitle.Font = Enum.Font.GothamBold
-isTitle.TextSize = 11
-isTitle.TextXAlignment = Enum.TextXAlignment.Left
+isTitle.Size = UDim2.new(1, -80, 0, 12); isTitle.Position = UDim2.new(0, 34, 0, 4)
+isTitle.BackgroundTransparency = 1; isTitle.Text = "XJ Hub"
+isTitle.TextColor3 = Color3.new(1, 1, 1); isTitle.Font = Enum.Font.GothamBold
+isTitle.TextSize = 11; isTitle.TextXAlignment = Enum.TextXAlignment.Left
 
 local isInfo = Instance.new("TextLabel", island)
-isInfo.Size = UDim2.new(1, -80, 0, 10)
-isInfo.Position = UDim2.new(0, 34, 0, 18)
-isInfo.BackgroundTransparency = 1
-isInfo.Text = "点击展开"
-isInfo.TextColor3 = Color3.fromRGB(160, 160, 180)
-isInfo.Font = Enum.Font.Gotham
-isInfo.TextSize = 9
-isInfo.TextXAlignment = Enum.TextXAlignment.Left
+isInfo.Size = UDim2.new(1, -80, 0, 10); isInfo.Position = UDim2.new(0, 34, 0, 18)
+isInfo.BackgroundTransparency = 1; isInfo.Text = "点击展开"
+isInfo.TextColor3 = Color3.fromRGB(160, 160, 180); isInfo.Font = Enum.Font.Gotham
+isInfo.TextSize = 9; isInfo.TextXAlignment = Enum.TextXAlignment.Left
 
 local isDot = Instance.new("Frame", island)
-isDot.Size = UDim2.new(0, 6, 0, 6)
-isDot.Position = UDim2.new(1, -14, 0.5, -3)
-isDot.BackgroundColor3 = Color3.fromRGB(52, 219, 137)
-isDot.BorderSizePixel = 0
+isDot.Size = UDim2.new(0, 6, 0, 6); isDot.Position = UDim2.new(1, -14, 0.5, -3)
+isDot.BackgroundColor3 = Color3.fromRGB(52, 219, 137); isDot.BorderSizePixel = 0
 Instance.new("UICorner", isDot).CornerRadius = UDim.new(1, 0)
 Tween:Create(isDot, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
     BackgroundTransparency = 0.6,
 }):Play()
 
--- 灵动岛拖动
 local iDrag, iStart, iPos, iMoved = false, nil, nil, false
 island.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -904,7 +923,6 @@ UIS.InputChanged:Connect(function(input)
     end
 end)
 
--- ========== 最小化/恢复（修复背景透明度 bug） ==========
 local minimized = false
 local function minimize()
     if minimized then return end
@@ -930,12 +948,9 @@ local function restore()
     task.wait(0.22)
     island.Visible = false
     main.Visible = true
-    -- ✅ 修复：恢复背景透明度和尺寸
     main.Size = UDim2.new(0, 100, 0, 60)
-    main.BackgroundTransparency = 1
     Tween:Create(main, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
         Size = UDim2.new(0, 460, 0, 340),
-        BackgroundTransparency = 0,
     }):Play()
 end
 
@@ -948,7 +963,7 @@ end)
 minBtn.MouseButton1Click:Connect(minimize)
 closeBtn.MouseButton1Click:Connect(function() screen:Destroy() end)
 
--- 主窗口拖动
+-- 拖拽
 local drag, dStart, dPos = false, nil, nil
 topbar.InputBegan:Connect(function(input)
     if blockDrag then return end
@@ -977,8 +992,9 @@ local sidebar = Instance.new("Frame", main)
 sidebar.Size = UDim2.new(0, 90, 1, -54)
 sidebar.Position = UDim2.new(0, 6, 0, 48)
 sidebar.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-sidebar.BackgroundTransparency = 0.2
+sidebar.BackgroundTransparency = 0.35
 sidebar.BorderSizePixel = 0
+sidebar.ZIndex = 2
 Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 8)
 
 local innerNav = Instance.new("ScrollingFrame", sidebar)
@@ -987,6 +1003,7 @@ innerNav.BackgroundTransparency = 1; innerNav.BorderSizePixel = 0
 innerNav.ScrollBarThickness = 0
 innerNav.CanvasSize = UDim2.new(0, 0, 0, 0)
 innerNav.AutomaticCanvasSize = Enum.AutomaticSize.Y
+innerNav.ZIndex = 3
 local nl = Instance.new("UIListLayout", innerNav)
 nl.Padding = UDim.new(0, 2)
 local np = Instance.new("UIPadding", innerNav)
@@ -997,8 +1014,9 @@ local content = Instance.new("Frame", main)
 content.Size = UDim2.new(1, -104, 1, -54)
 content.Position = UDim2.new(0, 98, 0, 48)
 content.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
-content.BackgroundTransparency = 0.2
+content.BackgroundTransparency = 0.35
 content.BorderSizePixel = 0
+content.ZIndex = 2
 Instance.new("UICorner", content).CornerRadius = UDim.new(0, 8)
 
 local pages, tabButtons = {}, {}
@@ -1015,6 +1033,7 @@ local function createPage(name)
     page.AutomaticCanvasSize = Enum.AutomaticSize.Y
     page.CanvasSize = UDim2.new(0, 0, 0, 0)
     page.Visible = false
+    page.ZIndex = 3
     local ll = Instance.new("UIListLayout", page)
     ll.Padding = UDim.new(0, 4)
     pages[name] = page
@@ -1031,6 +1050,7 @@ local function createTab(name, icon)
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.LayoutOrder = order
     btn.AutoButtonColor = false
+    btn.ZIndex = 3
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     local ico = Instance.new("TextLabel", btn)
     ico.Size = UDim2.new(0, 16, 1, 0); ico.Position = UDim2.new(0, 6, 0, 0)
@@ -1038,12 +1058,14 @@ local function createTab(name, icon)
     ico.TextColor3 = Color3.fromRGB(190, 190, 210)
     ico.Font = Enum.Font.GothamBold; ico.TextSize = 11
     ico.TextXAlignment = Enum.TextXAlignment.Center
+    ico.ZIndex = 4
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -24, 1, 0); lbl.Position = UDim2.new(0, 24, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = name
     lbl.TextColor3 = Color3.fromRGB(190, 190, 210)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
 
     tabButtons[name] = { btn = btn, lbl = lbl, ico = ico, order = order }
 
@@ -1066,9 +1088,10 @@ local function createToggle(parent, name, def, cb)
     local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, 0, 0, 32)
     btn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    btn.BackgroundTransparency = 0.1
+    btn.BackgroundTransparency = 0.15
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
+    btn.ZIndex = 3
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -56, 1, 0); lbl.Position = UDim2.new(0, 10, 0, 0)
@@ -1076,17 +1099,16 @@ local function createToggle(parent, name, def, cb)
     lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
     local ind = Instance.new("Frame", btn)
-    ind.Size = UDim2.new(0, 36, 0, 18)
-    ind.Position = UDim2.new(1, -44, 0.5, -9)
-    ind.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
-    ind.BorderSizePixel = 0
+    ind.Size = UDim2.new(0, 36, 0, 18); ind.Position = UDim2.new(1, -44, 0.5, -9)
+    ind.BackgroundColor3 = Color3.fromRGB(50, 50, 65); ind.BorderSizePixel = 0
+    ind.ZIndex = 4
     Instance.new("UICorner", ind).CornerRadius = UDim.new(1, 0)
     local knob = Instance.new("Frame", ind)
-    knob.Size = UDim2.new(0, 14, 0, 14)
-    knob.Position = UDim2.new(0, 2, 0.5, -7)
-    knob.BackgroundColor3 = Color3.new(1, 1, 1)
-    knob.BorderSizePixel = 0
+    knob.Size = UDim2.new(0, 14, 0, 14); knob.Position = UDim2.new(0, 2, 0.5, -7)
+    knob.BackgroundColor3 = Color3.new(1, 1, 1); knob.BorderSizePixel = 0
+    knob.ZIndex = 5
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
     local state = def or false
     local function refresh()
@@ -1108,8 +1130,9 @@ local function createSlider(parent, name, min, max, def, cb)
     local frame = Instance.new("Frame", parent)
     frame.Size = UDim2.new(1, 0, 0, 46)
     frame.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    frame.BackgroundTransparency = 0.1
+    frame.BackgroundTransparency = 0.15
     frame.BorderSizePixel = 0
+    frame.ZIndex = 3
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
     local lbl = Instance.new("TextLabel", frame)
     lbl.Size = UDim2.new(1, -56, 0, 14); lbl.Position = UDim2.new(0, 10, 0, 4)
@@ -1117,28 +1140,33 @@ local function createSlider(parent, name, min, max, def, cb)
     lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
     local vLbl = Instance.new("TextLabel", frame)
     vLbl.Size = UDim2.new(0, 46, 0, 14); vLbl.Position = UDim2.new(1, -56, 0, 4)
     vLbl.BackgroundTransparency = 1; vLbl.Text = tostring(def)
     vLbl.TextColor3 = Color3.fromRGB(190, 130, 255)
     vLbl.Font = Enum.Font.GothamBold; vLbl.TextSize = 12
     vLbl.TextXAlignment = Enum.TextXAlignment.Right
+    vLbl.ZIndex = 4
     local track = Instance.new("TextButton", frame)
     track.Size = UDim2.new(1, -20, 0, 6); track.Position = UDim2.new(0, 10, 0, 28)
     track.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
     track.Text = ""; track.BorderSizePixel = 0
     track.AutoButtonColor = false
+    track.ZIndex = 4
     Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
     local fill = Instance.new("Frame", track)
     fill.Size = UDim2.new((def - min) / (max - min), 0, 1, 0)
     fill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
     fill.BorderSizePixel = 0
+    fill.ZIndex = 5
     Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
     local dot = Instance.new("Frame", track)
     dot.Size = UDim2.new(0, 12, 0, 12)
     dot.Position = UDim2.new((def - min) / (max - min), -6, 0.5, -6)
     dot.BackgroundColor3 = Color3.new(1, 1, 1)
     dot.BorderSizePixel = 0
+    dot.ZIndex = 6
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
     Instance.new("UIStroke", dot).Color = Color3.fromRGB(168, 85, 247)
     local dg = false
@@ -1167,9 +1195,10 @@ local function createDropdown(parent, name, options, defIdx, cb)
     local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, 0, 0, 32)
     btn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    btn.BackgroundTransparency = 0.1
+    btn.BackgroundTransparency = 0.15
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
+    btn.ZIndex = 3
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -100, 1, 0); lbl.Position = UDim2.new(0, 10, 0, 0)
@@ -1177,15 +1206,15 @@ local function createDropdown(parent, name, options, defIdx, cb)
     lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
     lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.ZIndex = 4
     local vBox = Instance.new("TextButton", btn)
-    vBox.Size = UDim2.new(0, 84, 0, 22)
-    vBox.Position = UDim2.new(1, -92, 0.5, -11)
+    vBox.Size = UDim2.new(0, 84, 0, 22); vBox.Position = UDim2.new(1, -92, 0.5, -11)
     vBox.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
     vBox.Text = options[defIdx or 1]
     vBox.TextColor3 = Color3.fromRGB(235, 235, 245)
     vBox.Font = Enum.Font.Gotham; vBox.TextSize = 10
-    vBox.BorderSizePixel = 0
-    vBox.AutoButtonColor = false
+    vBox.BorderSizePixel = 0; vBox.AutoButtonColor = false
+    vBox.ZIndex = 4
     Instance.new("UICorner", vBox).CornerRadius = UDim.new(0, 5)
     local idx = defIdx or 1
     vBox.MouseButton1Click:Connect(function()
@@ -1225,8 +1254,9 @@ tabButtons["主页"].btn.BackgroundTransparency = 0.75
 local userCard = Instance.new("Frame", pHome)
 userCard.Size = UDim2.new(1, 0, 0, 70)
 userCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-userCard.BackgroundTransparency = 0.1
+userCard.BackgroundTransparency = 0.2
 userCard.BorderSizePixel = 0
+userCard.ZIndex = 3
 Instance.new("UICorner", userCard).CornerRadius = UDim.new(0, 7)
 
 local avatar = Instance.new("ImageLabel", userCard)
@@ -1235,6 +1265,7 @@ avatar.Position = UDim2.new(0, 8, 0.5, -27)
 avatar.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
 avatar.BorderSizePixel = 0
 avatar.Image = userInfo.thumb
+avatar.ZIndex = 4
 Instance.new("UICorner", avatar).CornerRadius = UDim.new(0, 27)
 local avStroke = Instance.new("UIStroke", avatar)
 avStroke.Color = Color3.fromRGB(168, 85, 247)
@@ -1242,59 +1273,54 @@ avStroke.Thickness = 2
 
 local nameLbl = Instance.new("TextLabel", userCard)
 nameLbl.Size = UDim2.new(1, -74, 0, 16); nameLbl.Position = UDim2.new(0, 70, 0, 8)
-nameLbl.BackgroundTransparency = 1
-nameLbl.Text = userInfo.name
-nameLbl.TextColor3 = Color3.new(1, 1, 1)
-nameLbl.Font = Enum.Font.GothamBold
-nameLbl.TextSize = 13
-nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+nameLbl.BackgroundTransparency = 1; nameLbl.Text = userInfo.name
+nameLbl.TextColor3 = Color3.new(1, 1, 1); nameLbl.Font = Enum.Font.GothamBold
+nameLbl.TextSize = 13; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+nameLbl.ZIndex = 4
 
 local infoLbl = Instance.new("TextLabel", userCard)
 infoLbl.Size = UDim2.new(1, -74, 0, 12); infoLbl.Position = UDim2.new(0, 70, 0, 26)
 infoLbl.BackgroundTransparency = 1
 infoLbl.Text = "@" .. userInfo.displayName .. " · " .. userInfo.membership
-infoLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
-infoLbl.Font = Enum.Font.Gotham
-infoLbl.TextSize = 10
-infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+infoLbl.TextColor3 = Color3.fromRGB(180, 180, 200); infoLbl.Font = Enum.Font.Gotham
+infoLbl.TextSize = 10; infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+infoLbl.ZIndex = 4
 
 local memberLbl = Instance.new("TextLabel", userCard)
 memberLbl.Size = UDim2.new(1, -74, 0, 12); memberLbl.Position = UDim2.new(0, 70, 0, 40)
 memberLbl.BackgroundTransparency = 1
 memberLbl.Text = "ID: " .. userInfo.userId .. " · 账号 " .. userInfo.accountAge .. " 天"
-memberLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
-memberLbl.Font = Enum.Font.Gotham
-memberLbl.TextSize = 10
-memberLbl.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl.TextColor3 = Color3.fromRGB(180, 180, 200); memberLbl.Font = Enum.Font.Gotham
+memberLbl.TextSize = 10; memberLbl.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl.ZIndex = 4
 
 local memberLbl2 = Instance.new("TextLabel", userCard)
 memberLbl2.Size = UDim2.new(1, -74, 0, 12); memberLbl2.Position = UDim2.new(0, 70, 0, 54)
 memberLbl2.BackgroundTransparency = 1
 memberLbl2.Text = "队伍: " .. teamLabel(LP) .. " · 玩家 " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
-memberLbl2.TextColor3 = Color3.fromRGB(190, 130, 255)
-memberLbl2.Font = Enum.Font.Gotham
-memberLbl2.TextSize = 10
-memberLbl2.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl2.TextColor3 = Color3.fromRGB(190, 130, 255); memberLbl2.Font = Enum.Font.Gotham
+memberLbl2.TextSize = 10; memberLbl2.TextXAlignment = Enum.TextXAlignment.Left
+memberLbl2.ZIndex = 4
 
+-- 数据卡
 local statsCard = Instance.new("Frame", pHome)
 statsCard.Size = UDim2.new(1, 0, 0, 60)
 statsCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-statsCard.BackgroundTransparency = 0.1
+statsCard.BackgroundTransparency = 0.2
 statsCard.BorderSizePixel = 0
+statsCard.ZIndex = 3
 Instance.new("UICorner", statsCard).CornerRadius = UDim.new(0, 7)
 
 local statsTitle = Instance.new("TextLabel", statsCard)
 statsTitle.Size = UDim2.new(1, -20, 0, 16); statsTitle.Position = UDim2.new(0, 10, 0, 5)
-statsTitle.BackgroundTransparency = 1
-statsTitle.Text = "📊 实时数据"
-statsTitle.TextColor3 = Color3.fromRGB(150, 200, 255)
-statsTitle.Font = Enum.Font.GothamBold
-statsTitle.TextSize = 11
-statsTitle.TextXAlignment = Enum.TextXAlignment.Left
+statsTitle.BackgroundTransparency = 1; statsTitle.Text = "📊 实时数据"
+statsTitle.TextColor3 = Color3.fromRGB(150, 200, 255); statsTitle.Font = Enum.Font.GothamBold
+statsTitle.TextSize = 11; statsTitle.TextXAlignment = Enum.TextXAlignment.Left
+statsTitle.ZIndex = 4
 
 local statsRow = Instance.new("Frame", statsCard)
 statsRow.Size = UDim2.new(1, -20, 0, 32); statsRow.Position = UDim2.new(0, 10, 0, 22)
-statsRow.BackgroundTransparency = 1
+statsRow.BackgroundTransparency = 1; statsRow.ZIndex = 4
 local srl = Instance.new("UIListLayout", statsRow)
 srl.FillDirection = Enum.FillDirection.Horizontal
 srl.Padding = UDim.new(0, 5)
@@ -1303,18 +1329,18 @@ local function makeStatCell(parent, label, color)
     local cell = Instance.new("Frame", parent)
     cell.Size = UDim2.new(1/3, -4, 1, 0)
     cell.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
-    cell.BorderSizePixel = 0
+    cell.BorderSizePixel = 0; cell.ZIndex = 4
     Instance.new("UICorner", cell).CornerRadius = UDim.new(0, 5)
     local t = Instance.new("TextLabel", cell)
     t.Size = UDim2.new(1, 0, 0, 10); t.Position = UDim2.new(0, 0, 0, 2)
     t.BackgroundTransparency = 1; t.Text = label
     t.TextColor3 = Color3.fromRGB(150, 150, 180)
-    t.Font = Enum.Font.Gotham; t.TextSize = 8
+    t.Font = Enum.Font.Gotham; t.TextSize = 8; t.ZIndex = 5
     local v = Instance.new("TextLabel", cell)
     v.Size = UDim2.new(1, 0, 0, 16); v.Position = UDim2.new(0, 0, 0, 12)
     v.BackgroundTransparency = 1; v.Text = "0"
     v.TextColor3 = color
-    v.Font = Enum.Font.GothamBold; v.TextSize = 12
+    v.Font = Enum.Font.GothamBold; v.TextSize = 12; v.ZIndex = 5
     return v
 end
 
@@ -1333,6 +1359,46 @@ task.spawn(function()
             espValueCell.Text = string.format("%.1fms", stats.espAvgTime * 1000)
         end)
         task.wait(0.5)
+    end
+end)
+
+-- 服务器列表卡（说明）
+local serverCard = Instance.new("Frame", pHome)
+serverCard.Size = UDim2.new(1, 0, 0, 80)
+serverCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+serverCard.BackgroundTransparency = 0.2
+serverCard.BorderSizePixel = 0
+serverCard.ZIndex = 3
+Instance.new("UICorner", serverCard).CornerRadius = UDim.new(0, 7)
+
+local svTitle = Instance.new("TextLabel", serverCard)
+svTitle.Size = UDim2.new(1, -20, 0, 16); svTitle.Position = UDim2.new(0, 10, 0, 5)
+svTitle.BackgroundTransparency = 1
+svTitle.Text = "🌐 服务器信息"
+svTitle.TextColor3 = Color3.fromRGB(150, 200, 255)
+svTitle.Font = Enum.Font.GothamBold; svTitle.TextSize = 11
+svTitle.TextXAlignment = Enum.TextXAlignment.Left; svTitle.ZIndex = 4
+
+local svInfo = Instance.new("TextLabel", serverCard)
+svInfo.Size = UDim2.new(1, -20, 0, 50); svInfo.Position = UDim2.new(0, 10, 0, 24)
+svInfo.BackgroundTransparency = 1
+svInfo.Text = "当前服务器延迟: " .. stats.ping .. " ms\n" ..
+             "PlaceId: " .. tostring(game.PlaceId) .. "\n" ..
+             "JobId: " .. tostring(game.JobId):sub(1, 8) .. "..."
+svInfo.TextColor3 = Color3.fromRGB(200, 200, 220)
+svInfo.Font = Enum.Font.Gotham; svInfo.TextSize = 10
+svInfo.TextXAlignment = Enum.TextXAlignment.Left
+svInfo.TextYAlignment = Enum.TextYAlignment.Top
+svInfo.ZIndex = 4
+
+task.spawn(function()
+    while screen.Parent do
+        pcall(function()
+            svInfo.Text = "当前服务器延迟: " .. stats.ping .. " ms\n" ..
+                          "PlaceId: " .. tostring(game.PlaceId) .. "\n" ..
+                          "JobId: " .. tostring(game.JobId):sub(1, 8) .. "..."
+        end)
+        task.wait(1)
     end
 end)
 
@@ -1365,9 +1431,11 @@ createSlider(pAim, "FOV 大小", 20, 400, 120, function(v) S.aimbot.fov = v end)
 createSlider(pAim, "平滑度", 1, 10, 3, function(v) S.aimbot.smoothness = v / 10 end)
 
 createToggle(pEsp, "开启透视", false, function(v) S.esp.enabled = v end)
-createToggle(pEsp, "队伍标签", true, function(v) S.esp.team = v end)
-createToggle(pEsp, "血量数字", true, function(v) S.esp.health = v end)
-createToggle(pEsp, "距离", true, function(v) S.esp.distance = v end)
+createToggle(pEsp, "显示名字", true, function(v) S.esp.name = v end)
+createToggle(pEsp, "显示职业", true, function(v) S.esp.team = v end)
+createToggle(pEsp, "显示距离", true, function(v) S.esp.distance = v end)
+createToggle(pEsp, "显示血量", true, function(v) S.esp.health = v end)
+createToggle(pEsp, "显示血条", true, function(v) S.esp.bar = v end)
 createToggle(pEsp, "显示高亮", true, function(v) S.esp.highlight = v end)
 createToggle(pEsp, "队伍着色", true, function(v) S.esp.colorByTeam = v end)
 
@@ -1431,36 +1499,28 @@ lLogoTxt.ZIndex = 103
 
 local lTitle = Instance.new("TextLabel", lCard)
 lTitle.Size = UDim2.new(1, 0, 0, 14); lTitle.Position = UDim2.new(0, 0, 0, 62)
-lTitle.BackgroundTransparency = 1
-lTitle.Text = "XJ HUB 1.0 beta"
-lTitle.TextColor3 = Color3.new(1, 1, 1)
-lTitle.Font = Enum.Font.GothamBold
-lTitle.TextSize = 12
-lTitle.ZIndex = 102
+lTitle.BackgroundTransparency = 1; lTitle.Text = "XJ HUB 1.0 beta"
+lTitle.TextColor3 = Color3.new(1, 1, 1); lTitle.Font = Enum.Font.GothamBold
+lTitle.TextSize = 12; lTitle.ZIndex = 102
 
 local lBarBg = Instance.new("Frame", lCard)
 lBarBg.Size = UDim2.new(1, -36, 0, 4); lBarBg.Position = UDim2.new(0, 18, 0, 86)
 lBarBg.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-lBarBg.BorderSizePixel = 0
-lBarBg.ZIndex = 102
+lBarBg.BorderSizePixel = 0; lBarBg.ZIndex = 102
 Instance.new("UICorner", lBarBg).CornerRadius = UDim.new(1, 0)
 
 local lBarFill = Instance.new("Frame", lBarBg)
 lBarFill.Size = UDim2.new(0, 0, 1, 0)
 lBarFill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
-lBarFill.BorderSizePixel = 0
-lBarFill.ZIndex = 103
+lBarFill.BorderSizePixel = 0; lBarFill.ZIndex = 103
 Instance.new("UICorner", lBarFill).CornerRadius = UDim.new(1, 0)
 
 local lStatus = Instance.new("TextLabel", lCard)
 lStatus.Size = UDim2.new(1, -36, 0, 14); lStatus.Position = UDim2.new(0, 18, 0, 98)
-lStatus.BackgroundTransparency = 1
-lStatus.Text = "初始化..."
+lStatus.BackgroundTransparency = 1; lStatus.Text = "初始化..."
 lStatus.TextColor3 = Color3.fromRGB(200, 200, 220)
-lStatus.Font = Enum.Font.GothamMedium
-lStatus.TextSize = 9
-lStatus.TextXAlignment = Enum.TextXAlignment.Left
-lStatus.ZIndex = 102
+lStatus.Font = Enum.Font.GothamMedium; lStatus.TextSize = 9
+lStatus.TextXAlignment = Enum.TextXAlignment.Left; lStatus.ZIndex = 102
 
 task.spawn(function()
     lStatus.Text = "初始化..."
