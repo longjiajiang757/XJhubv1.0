@@ -1,5 +1,5 @@
 -- ============================================================
--- XJ Hub 1.0 beta · 人性化优化版
+-- XJ Hub 1.0 beta · 修复版
 -- 作者: 嘉酱
 -- ============================================================
 
@@ -10,7 +10,6 @@ local UIS     = game:GetService("UserInputService")
 local Tween   = game:GetService("TweenService")
 local WS      = game:GetService("Workspace")
 local LP      = Players.LocalPlayer
-local CAM     = WS.CurrentCamera
 
 local function ok(m)  print("[XJ] ✅ " .. m) end
 local function no(m)  print("[XJ] ❌ " .. m) end
@@ -18,7 +17,6 @@ local function inf(m) print("[XJ] ℹ️ " .. m) end
 
 inf("XJ Hub 开始加载")
 
--- ========== 状态 ==========
 local S = {
     stamina = false, food = false, noRagdoll = false, noFallDamage = false,
     infiniteAmmo = false, rapidFire = false,
@@ -34,96 +32,67 @@ local S = {
 }
 
 -- ============================================================
--- 绕过反作弊（逐项自检）
+-- 绕过（只做必要的，避免破坏游戏）
 -- ============================================================
 inf("========== 绕过模块自检 ==========")
 local bypassScore, bypassTotal = 0, 0
-local bypassList = {}
-
 local function checkBypass(name, fn)
     bypassTotal = bypassTotal + 1
     local ok2, err = pcall(fn)
     if ok2 then
         bypassScore = bypassScore + 1
-        table.insert(bypassList, { name = name, ok = true })
         ok("[绕过] " .. name)
     else
-        table.insert(bypassList, { name = name, ok = false, err = tostring(err) })
         no("[绕过] " .. name .. " : " .. tostring(err))
     end
 end
 
-checkBypass("hookmetamethod", function()
+-- 1. 环境检测
+checkBypass("hookmetamethod 可用", function()
     if not hookmetamethod then error("不可用") end
 end)
-checkBypass("newcclosure", function()
+checkBypass("newcclosure 可用", function()
     if not newcclosure then error("不可用") end
 end)
-checkBypass("getnamecallmethod", function()
-    if not getnamecallmethod then error("不可用") end
-end)
 
-checkBypass("Kick 拦截", function()
-    local orig = hookmetamethod
-    orig(game, "__namecall", newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        if method == "Kick" and self == LP then return end
-        return orig(self, ...)
-    end))
-end)
-
-checkBypass("PlayerEvent 拦截", function()
+-- 2. 只做一次 namecall hook（合并所有检查）
+checkBypass("namecall 统一拦截", function()
+    if not (hookmetamethod and newcclosure and getnamecallmethod) then
+        error("缺少前置")
+    end
     local orig = hookmetamethod
     orig(game, "__namecall", newcclosure(function(self, ...)
         local packed = table.pack(...)
         local method = getnamecallmethod()
+
+        -- Kick 屏蔽
+        if method == "Kick" and self == LP then return end
+
+        -- 只拦敏感事件，不动游戏正常流程
         if method == "FireServer" and self.Name == "PlayerEvent" then
             local first = packed[1]
-            if first == "char2" or first == "coreGame" or first == "vehicleTrack"
-                or first == "platform" or first == "messageDeliver" or first == "runOverVictim"
-                or first == "DEBUG2" or first == "chatCommand" or first == "controlsGuide"
-                or first == "reportExploiter" then
+            -- 只屏蔽明显的反作弊上报事件
+            if first == "reportExploiter" or first == "exploitReport"
+                or first == "reportCheater" then
                 return
             end
             if S.noFallDamage and first == "takeDamage" then return nil end
         end
-        return orig(self, table.unpack(packed, 1, packed.n))
-    end))
-end)
 
-checkBypass("PlayerFunc 拦截", function()
-    local orig = hookmetamethod
-    orig(game, "__namecall", newcclosure(function(self, ...)
-        local packed = table.pack(...)
-        local method = getnamecallmethod()
+        -- PlayerFunc 敏感调用返回假值
         if method == "InvokeServer" and self.Name == "PlayerFunc" then
             local first = packed[1]
-            if first == "getPlayerData" or first == "getPlayerBanHistory"
-                or first == "getPlayerInGame" or first == "getPlayerServerEncounters"
-                or first == "getSecret" or first == "checkExploit" then
+            if first == "getPlayerBanHistory" or first == "checkExploit"
+                or first == "getSecret" or first == "getClientInfo" then
                 return true
             end
         end
+
         return orig(self, table.unpack(packed, 1, packed.n))
     end))
 end)
 
-checkBypass("GetService 屏蔽", function()
-    local orig = hookmetamethod
-    orig(game, "__index", newcclosure(function(self, key)
-        if self == game and (key == "GetService" or key == "getService") then
-            return function(_, svc)
-                if svc == "InsertService" or svc == "Selection" or svc == "Stats"
-                    or svc == "ScriptContext" then
-                    return nil
-                end
-                return orig(self, svc)
-            end
-        end
-        return orig(self, key)
-    end))
-end)
-
+-- 3. AntiCheat 表替换
 checkBypass("AntiCheat 表替换", function()
     local ac = RS:FindFirstChild("AntiCheat", true)
     if ac and type(ac) == "table" then
@@ -139,6 +108,7 @@ checkBypass("AntiCheat 表替换", function()
     end
 end)
 
+-- 4. Ratchet 补丁
 checkBypass("Ratchet 补丁", function()
     local Ratchet = require(RS:FindFirstChild("Ratchet", true))
     local Sha256  = require(RS:FindFirstChild("Sha256", true))
@@ -155,6 +125,7 @@ checkBypass("Ratchet 补丁", function()
     end
 end)
 
+-- 5. Ragdoll 补丁
 checkBypass("Ragdoll 补丁", function()
     local Ragdoll = require(RS.Modules.Ragdoll)
     local a = Ragdoll.activate
@@ -164,13 +135,14 @@ checkBypass("Ragdoll 补丁", function()
     end
 end)
 
+-- 6. 清理上报远程
 checkBypass("上报远程清理", function()
     local remote = RS:FindFirstChild("Remote", true)
     if remote then
         for _, c in ipairs(remote:GetChildren()) do
             local n = c.Name:lower()
-            if n:find("report") or n:find("log") or n:find("exploit") then
-                c:Destroy()
+            if n:find("report") or n:find("exploitlog") then
+                pcall(function() c:Destroy() end)
             end
         end
     end
@@ -180,9 +152,9 @@ inf("绕过自检: " .. bypassScore .. "/" .. bypassTotal)
 if bypassScore == bypassTotal then
     ok("全部绕过模块已启动")
 elseif bypassScore >= bypassTotal * 0.7 then
-    inf("大部分绕过已启动，部分失败")
+    inf("大部分绕过已启动")
 else
-    no("绕过能力较弱，可能被检测")
+    no("绕过能力较弱")
 end
 
 -- ========== 环境自检 ==========
@@ -599,7 +571,7 @@ end)
 ok("ESP")
 
 -- ============================================================
--- UI 构建（人性化优化版）
+-- UI 构建
 -- ============================================================
 local uiParent = (gethui and gethui()) or game:GetService("CoreGui")
 local oldGui = uiParent:FindFirstChild("XJHubUI")
@@ -645,7 +617,6 @@ task.spawn(function()
     end
 end)
 
--- 标题栏
 local topbar = Instance.new("Frame", main)
 topbar.Size = UDim2.new(1, 0, 0, 46)
 topbar.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
@@ -711,7 +682,6 @@ end
 blockTopbarDrag(minBtn)
 blockTopbarDrag(closeBtn)
 
--- 悬浮球
 local bubble = Instance.new("TextButton", screen)
 bubble.Size = UDim2.new(0, 48, 0, 48)
 bubble.Position = UDim2.new(0, 20, 0.5, -24)
@@ -782,7 +752,6 @@ end)
 minBtn.MouseButton1Click:Connect(minimize)
 closeBtn.MouseButton1Click:Connect(function() screen:Destroy() end)
 
--- 拖拽
 local drag, dStart, dPos = false, nil, nil
 topbar.InputBegan:Connect(function(input)
     if blockDrag then return end
@@ -806,7 +775,6 @@ UIS.InputEnded:Connect(function(input)
     end
 end)
 
--- 侧栏
 local sidebar = Instance.new("Frame", main)
 sidebar.Size = UDim2.new(0, 100, 1, -58)
 sidebar.Position = UDim2.new(0, 8, 0, 52)
@@ -825,8 +793,6 @@ indicator.ZIndex = 2
 Instance.new("UICorner", indicator).CornerRadius = UDim.new(0, 7)
 local indStroke = Instance.new("UIStroke", indicator)
 indStroke.Color = Color3.fromRGB(190, 130, 255); indStroke.Thickness = 1; indStroke.Transparency = 0.4
-local indGrad = Instance.new("UIGradient", indicator)
-indGrad.Color = ColorSequence.new(Color3.fromRGB(168,85,247), Color3.fromRGB(236,72,153))
 
 local innerNav = Instance.new("ScrollingFrame", sidebar)
 innerNav.Size = UDim2.new(1,0,1,0)
@@ -926,7 +892,6 @@ local function createTab(name, icon)
     return btn
 end
 
--- 控件（含悬停反馈）
 local function createToggle(parent, name, def, cb)
     local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, 0, 0, 36)
@@ -1005,16 +970,13 @@ local function createSlider(parent, name, min, max, def, cb)
     fill.BackgroundColor3 = Color3.fromRGB(168,85,247)
     fill.BorderSizePixel = 0
     Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
-    local fillGrad = Instance.new("UIGradient", fill)
-    fillGrad.Color = ColorSequence.new(Color3.fromRGB(168,85,247), Color3.fromRGB(236,72,153))
     local dot = Instance.new("Frame", track)
     dot.Size = UDim2.new(0, 14, 0, 14)
     dot.Position = UDim2.new((def - min) / (max - min), -7, 0.5, -7)
     dot.BackgroundColor3 = Color3.new(1,1,1)
     dot.BorderSizePixel = 0
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
-    local dotStroke = Instance.new("UIStroke", dot)
-    dotStroke.Color = Color3.fromRGB(168, 85, 247); dotStroke.Thickness = 2
+    Instance.new("UIStroke", dot).Color = Color3.fromRGB(168, 85, 247)
     local dg = false
     local function update(x)
         local pos = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
@@ -1069,7 +1031,6 @@ local function createDropdown(parent, name, options, defIdx, cb)
     end)
 end
 
--- 页面
 local pHome   = createPage("主页")
 local pPlayer = createPage("玩家")
 local pCombat = createPage("战斗")
@@ -1090,7 +1051,7 @@ currentTab = "主页"
 tabButtons["主页"].lbl.TextColor3 = Color3.new(1,1,1)
 tabButtons["主页"].ico.TextColor3 = Color3.new(1,1,1)
 
--- ========== 主页 ==========
+-- 主页
 local welcome = Instance.new("Frame", pHome)
 welcome.Size = UDim2.new(1, 0, 0, 70)
 welcome.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
@@ -1125,7 +1086,6 @@ welcomeBy.Font = Enum.Font.Gotham
 welcomeBy.TextSize = 11
 welcomeBy.TextXAlignment = Enum.TextXAlignment.Left
 
--- 绕过状态卡
 local bypassCard = Instance.new("Frame", pHome)
 bypassCard.Size = UDim2.new(1, 0, 0, 100)
 bypassCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
@@ -1171,14 +1131,13 @@ local bpDetail = Instance.new("TextLabel", bypassCard)
 bpDetail.Size = UDim2.new(1, -20, 0, 20); bpDetail.Position = UDim2.new(0, 12, 0, 70)
 bpDetail.BackgroundTransparency = 1
 bpDetail.Text = bypassScore == bypassTotal
-    and "✅ 全部绕过已就绪 · 可以尝试启动"
+    and "✅ 全部绕过已就绪"
     or (bypassScore >= bypassTotal * 0.7 and "⚠️ 部分绕过失败 · 风险较高" or "❌ 绕过能力弱 · 不建议使用")
 bpDetail.TextColor3 = statusColor
 bpDetail.Font = Enum.Font.Gotham
 bpDetail.TextSize = 11
 bpDetail.TextXAlignment = Enum.TextXAlignment.Left
 
--- 使用提示
 local tipCard = Instance.new("Frame", pHome)
 tipCard.Size = UDim2.new(1, 0, 0, 60)
 tipCard.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
@@ -1205,7 +1164,6 @@ tipTxt.TextSize = 11
 tipTxt.TextXAlignment = Enum.TextXAlignment.Left
 tipTxt.TextYAlignment = Enum.TextYAlignment.Top
 
--- 玩家页
 createToggle(pPlayer, "无限体力", false, function(v) S.stamina = v end)
 createToggle(pPlayer, "无限饥饿", false, function(v) S.food = v end)
 createToggle(pPlayer, "防布娃娃", false, function(v) S.noRagdoll = v end)
@@ -1215,7 +1173,6 @@ createToggle(pPlayer, "快速射击", false, function(v) S.rapidFire = v end)
 createToggle(pPlayer, "自动捡钱", false, function(v) S.autoMoney = v end)
 createToggle(pPlayer, "自动农民", false, function(v) S.autoFarmer = v end)
 
--- 战斗页
 createToggle(pCombat, "杀戮光环", false, function(v) S.auraEnabled = v end)
 createToggle(pCombat, "拟人化延迟", true, function(v) S.auraHumanize = v end)
 createToggle(pCombat, "静默模式", false, function(v) S.auraSilent = v end)
@@ -1223,7 +1180,6 @@ createSlider(pCombat, "光环范围", 50, 800, 200, function(v) S.auraRange = v 
 createSlider(pCombat, "光环伤害", 1, 100, 5, function(v) S.auraDamage = v end)
 createToggle(pCombat, "自动铐", false, function(v) S.autoCuff = v end)
 
--- 自瞄页
 createToggle(pAim, "开启自瞄（右键触发）", false, function(v) S.aimbot.enabled = v end)
 createToggle(pAim, "显示 FOV 圈", true, function(v) S.aimbot.showFov = v end)
 createToggle(pAim, "显示追踪线", false, function(v) S.aimbot.showTracer = v end)
@@ -1231,7 +1187,6 @@ createDropdown(pAim, "FOV 颜色", {"红色", "绿色", "蓝色", "紫色", "白
 createSlider(pAim, "FOV 大小", 20, 400, 120, function(v) S.aimbot.fov = v end)
 createSlider(pAim, "平滑度", 1, 10, 3, function(v) S.aimbot.smoothness = v / 10 end)
 
--- 透视页
 createToggle(pEsp, "开启透视", false, function(v) S.esp.enabled = v end)
 createToggle(pEsp, "显示名字", true, function(v) S.esp.name = v end)
 createToggle(pEsp, "显示职业", true, function(v) S.esp.team = v end)
@@ -1240,7 +1195,6 @@ createToggle(pEsp, "显示血量", true, function(v) S.esp.health = v end)
 createToggle(pEsp, "显示血条", true, function(v) S.esp.bar = v end)
 createToggle(pEsp, "显示高亮", true, function(v) S.esp.highlight = v end)
 
--- 飞车页
 createToggle(pCar, "飞行模式", false, function(v)
     S.flyEnabled = v
     if v then startFly() else stopFly() end
@@ -1264,7 +1218,7 @@ createSlider(pCar, "跳跃高度", 50, 400, 100, function(v) S.jumpPower = v end
 ok("UI 构建完成")
 
 -- ============================================================
--- 加载动画
+-- 加载动画（缩短时间）
 -- ============================================================
 local loading = Instance.new("Frame", screen)
 loading.Size = UDim2.new(1, 0, 1, 0)
@@ -1384,46 +1338,45 @@ lPct.TextXAlignment = Enum.TextXAlignment.Right
 lPct.ZIndex = 102
 
 local steps = {
-    { text = "初始化运行环境", pct = 20 },
-    { text = "注入绕过保护", pct = 45 },
-    { text = "加载核心模块", pct = 70 },
-    { text = "构建 UI 界面", pct = 90 },
-    { text = "准备就绪", pct = 100 },
+    { text = "初始化运行环境", pct = 25 },
+    { text = "注入绕过保护", pct = 50 },
+    { text = "加载核心模块", pct = 75 },
+    { text = "构建 UI 界面", pct = 100 },
 }
 
 task.spawn(function()
     lLogo.Size = UDim2.new(0, 0, 0, 0)
-    Tween:Create(lLogo, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    Tween:Create(lLogo, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
         Size = UDim2.new(0, 60, 0, 60)
     }):Play()
-    task.wait(0.45)
+    task.wait(0.3)
 
     for _, s in ipairs(steps) do
         lStatus.Text = s.text
         lPct.Text = s.pct .. "%"
-        Tween:Create(lBarFill, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Tween:Create(lBarFill, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
             Size = UDim2.new(s.pct / 100, 0, 1, 0)
         }):Play()
-        task.wait(0.3)
+        task.wait(0.22)
     end
 
-    task.wait(0.25)
+    task.wait(0.15)
 
-    Tween:Create(loading, TweenInfo.new(0.35), { BackgroundTransparency = 1 }):Play()
-    Tween:Create(lCard, TweenInfo.new(0.35), { BackgroundTransparency = 1 }):Play()
-    Tween:Create(lCardStroke, TweenInfo.new(0.35), { Transparency = 1 }):Play()
+    Tween:Create(loading, TweenInfo.new(0.25), { BackgroundTransparency = 1 }):Play()
+    Tween:Create(lCard, TweenInfo.new(0.25), { BackgroundTransparency = 1 }):Play()
+    Tween:Create(lCardStroke, TweenInfo.new(0.25), { Transparency = 1 }):Play()
     for _, d in ipairs(lCard:GetDescendants()) do
         if d:IsA("TextLabel") then
-            Tween:Create(d, TweenInfo.new(0.3), { TextTransparency = 1 }):Play()
+            Tween:Create(d, TweenInfo.new(0.2), { TextTransparency = 1 }):Play()
         end
     end
 
-    task.wait(0.4)
+    task.wait(0.3)
     loading:Destroy()
 
     main.Visible = true
     main.Size = UDim2.new(0, 90, 0, 70)
-    Tween:Create(main, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    Tween:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
         Size = UDim2.new(0, 480, 0, 360)
     }):Play()
 end)
