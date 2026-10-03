@@ -1,6 +1,7 @@
 -- ============================================================
--- XJ Hub v1.6 · 移动端安全版 (iOS/Android 全适配)
--- 关键: iOS Delta 禁用 Hook, 保留全部 UI 功能
+-- XJ Hub v1.6.1 · iOS Delta 完整修复版
+-- 修复: TouchEnded/TouchLongPress 不兼容 iOS
+-- 全平台: iOS Delta / Android / 桌面 通用
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -12,64 +13,57 @@ local WS      = game:GetService("Workspace")
 local LP      = Players.LocalPlayer
 
 local function log(m) pcall(function() print("[XJ] "..m) end) end
-log("v1.6 启动")
+log("v1.6.1 启动")
 
 -- ============================================================
--- 第一步: 设备 + 执行器检测 (最关键)
+-- 设备与执行器检测
 -- ============================================================
-local Exec = { name="未知", isMobile=false, isIOS=false, isAndroid=false,
-               isDelta=false, isCodex=false, isArceus=false,
-               hasHook=false, hasDrawing=false, hasGetGC=false,
-               hasFirePP=false, hasHui=false, hasGetConn=false }
-
--- 设备判断
+local Exec = {
+    name="未知", isMobile=false, isIOS=false, isAndroid=false,
+    isDelta=false, isCodex=false, isArceus=false,
+    hasHook=false, hasDrawing=false, hasGetGC=false,
+    hasFirePP=false, hasHui=false, hasGetConn=false
+}
 Exec.isMobile = UIS.TouchEnabled and not UIS.MouseEnabled
 local cam0 = WS.CurrentCamera
 local vp = cam0 and cam0.ViewportSize or Vector2.new(1280, 720)
 
--- 执行器名称
 pcall(function()
     if type(identifyexecutor) == "function" then
         Exec.name = tostring(identifyexecutor()) or "未知"
     end
 end)
 
--- 系统判断 (通过执行器名 + UserInputService)
 local uname = Exec.name:lower()
 Exec.isDelta   = uname:find("delta") ~= nil
 Exec.isCodex   = uname:find("codex") ~= nil
 Exec.isArceus  = uname:find("arceus") ~= nil
 Exec.isIOS     = Exec.isDelta or Exec.isCodex or uname:find("ios") ~= nil
-    or (Exec.isMobile and uname:find("mac") ~= nil)
 Exec.isAndroid = Exec.isMobile and not Exec.isIOS
 
--- 能力检测 (全部 pcall 包裹)
 local function tryCap(f) local v=false; pcall(function() v=f() end); return v end
-Exec.hasHook     = tryCap(function() return type(hookmetamethod)=="function" and type(newcclosure)=="function" end)
-Exec.hasDrawing  = tryCap(function() return type(Drawing)=="table" and type(Drawing.new)=="function" end)
-Exec.hasGetGC    = tryCap(function() return type(getgc)=="function" end)
-Exec.hasFirePP   = tryCap(function() return type(fireproximityprompt)=="function" end)
-Exec.hasHui      = tryCap(function() return type(gethui)=="function" end)
-Exec.hasGetConn  = tryCap(function() return type(getconnections)=="function" end)
+Exec.hasHook    = tryCap(function() return type(hookmetamethod)=="function" and type(newcclosure)=="function" end)
+Exec.hasDrawing = tryCap(function() return type(Drawing)=="table" and type(Drawing.new)=="function" end)
+Exec.hasGetGC   = tryCap(function() return type(getgc)=="function" end)
+Exec.hasFirePP  = tryCap(function() return type(fireproximityprompt)=="function" end)
+Exec.hasHui     = tryCap(function() return type(gethui)=="function" end)
+Exec.hasGetConn = tryCap(function() return type(getconnections)=="function" end)
 
--- 关键规则: iOS 上强制禁用 Hook
 if Exec.isIOS then
     Exec.hasHook = false
-    log("iOS 检测: Hook 层已强制禁用")
+    log("iOS 检测: Hook 层强制禁用")
 end
-
--- 关键规则: 手机端禁用 Drawing (用 BillboardGui 替代)
 if Exec.isMobile then
     Exec.hasDrawing = false
     log("移动端: Drawing 已禁用")
 end
 
-log(string.format("设备: %s | 执行器: %s | Hook: %s | Drawing: %s",
+log(string.format("设备: %s | 执行器: %s | Hook: %s",
     Exec.isMobile and (Exec.isIOS and "iOS" or "Android") or "桌面",
-    Exec.name, tostring(Exec.hasHook), tostring(Exec.hasDrawing)))
+    Exec.name, tostring(Exec.hasHook)))
 
 -- ============================================================
--- 第二步: ScreenGui 创建 (多路径容错)
+-- ScreenGui
 -- ============================================================
 local uiParent
 if Exec.hasHui then pcall(function() uiParent = gethui() end) end
@@ -89,7 +83,7 @@ screen.Parent = uiParent
 log("ScreenGui 已创建")
 
 -- ============================================================
--- 第三步: 工具函数
+-- 工具
 -- ============================================================
 local function getChar(p)
     p = p or LP
@@ -104,7 +98,7 @@ local function isOnGround(h)
 end
 
 -- ============================================================
--- 第四步: 游戏框架 (全 pcall)
+-- 游戏框架
 -- ============================================================
 local remote, playerEvent, playerFunc
 pcall(function() remote = RS:WaitForChild("Remote", 8) end)
@@ -124,7 +118,7 @@ pcall(function()
 end)
 
 -- ============================================================
--- 第五步: 状态表
+-- 状态
 -- ============================================================
 local S = {
     stamina=false, food=false, infiniteAmmo=false, rapidFire=false,
@@ -156,7 +150,6 @@ local function teamColor(p) return TEAM_COLORS[p.Team and p.Team.Name] or Color3
 local function teamLabel(p) return TEAM_NAMES[p.Team and p.Team.Name] or (p.Team and p.Team.Name or "无") end
 local CREW = { Civilian=true, Delivery=true, Transit=true }
 
--- 好友
 local friendSet = {}
 task.spawn(function()
     pcall(function()
@@ -171,7 +164,6 @@ task.spawn(function()
 end)
 local function isFriend(p) return friendSet[p.UserId] == true end
 
--- 性能
 local stats = { fps=0, frames=0, lastTick=tick(), ping=0, espAvg=0 }
 task.spawn(function()
     while screen.Parent do
@@ -188,7 +180,7 @@ local userInfo = {
 }
 
 -- ============================================================
--- 第六步: 通知 (移动端轻量)
+-- 通知
 -- ============================================================
 local notifyHolder = Instance.new("Frame", screen)
 notifyHolder.Size = UDim2.new(0, 220, 1, -20)
@@ -245,10 +237,8 @@ local function notify(title, desc, kind, duration)
 end
 
 -- ============================================================
--- 第七步: 物理功能模块
+-- 物理功能
 -- ============================================================
-
--- 速度 (BodyVelocity)
 local speedBV = nil
 local function refreshSpeed()
     local _, h, r = getChar(); if not h or not r then return end
@@ -268,7 +258,6 @@ local function refreshSpeed()
     end
 end
 
--- 飞行
 local Fly = {}
 local function stopFly()
     pcall(function()
@@ -313,7 +302,6 @@ local function startFly()
     end)
 end
 
--- Noclip
 local Noclip = { conn=nil, cache={}, parts={} }
 local function rebuildNoclipParts()
     Noclip.parts = {}
@@ -357,7 +345,7 @@ local function startNoclip()
 end
 
 -- ============================================================
--- 第八步: 自瞄
+-- 自瞄
 -- ============================================================
 local PART_MAP = { ["头部"]={"Head"}, ["胸部"]={"UpperTorso","Torso"} }
 local function getTargetPart(c)
@@ -388,7 +376,6 @@ local function hasWall(tPart, tChar)
     return not hit or hit.Instance:IsDescendantOf(tChar)
 end
 
--- 自瞄准星 (用 UI 而不是 Drawing, 因为移动端 Drawing 禁用了)
 local aimCrosshair = Instance.new("Frame", screen)
 aimCrosshair.Size = UDim2.new(0, 4, 0, 4)
 aimCrosshair.Position = UDim2.new(0.5, -2, 0.5, -2)
@@ -442,7 +429,7 @@ RunSvc.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
--- 第九步: 核心循环
+-- 核心循环
 -- ============================================================
 task.spawn(function()
     while screen.Parent do
@@ -760,7 +747,7 @@ pcall(function()
 end)
 
 -- ============================================================
--- 第十步: ESP (BillboardGui 移动端稳定方案)
+-- ESP (BillboardGui)
 -- ============================================================
 local espCache = {}
 local function buildESP(p, char, hrp)
@@ -865,14 +852,14 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- 第十一步: UI 构建 (移动端适配)
+-- UI 构建
 -- ============================================================
 local W, H, uiScale
 if Exec.isMobile then
-    if vp.X >= 800 then  -- 平板
+    if vp.X >= 800 then
         W, H = 400, 300
         uiScale = math.clamp(math.min(vp.X/650, vp.Y/500), 0.7, 0.95)
-    else  -- 手机
+    else
         W, H = 380, 280
         uiScale = math.clamp(math.min((vp.X-20)/420, (vp.Y-20)/320), 0.55, 0.9)
     end
@@ -915,7 +902,7 @@ lTxt.Font = Enum.Font.GothamBlack; lTxt.TextSize = 13
 
 local title = Instance.new("TextLabel", topbar)
 title.Size = UDim2.new(0, 200, 0, 14); title.Position = UDim2.new(0, 34, 0, 3)
-title.BackgroundTransparency = 1; title.Text = "XJ HUB 1.6"
+title.BackgroundTransparency = 1; title.Text = "XJ HUB 1.6.1"
 title.TextColor3 = Color3.new(1,1,1); title.Font = Enum.Font.GothamBold
 title.TextSize = 12; title.TextXAlignment = Enum.TextXAlignment.Left
 
@@ -944,7 +931,7 @@ closeBtn.TextColor3 = Color3.new(1,1,1); closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextSize = 17; closeBtn.BorderSizePixel = 0
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
 
--- 拖拽
+-- 拖拽 (全平台通用)
 local drag, dStart, dPos = false, nil, nil
 topbar.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -989,7 +976,7 @@ Instance.new("UICorner", isAvatar).CornerRadius = UDim.new(1, 0)
 
 local isTitle = Instance.new("TextLabel", island)
 isTitle.Size = UDim2.new(1, -80, 0, 12); isTitle.Position = UDim2.new(0, 34, 0, 3)
-isTitle.BackgroundTransparency = 1; isTitle.Text = "XJ Hub v1.6"
+isTitle.BackgroundTransparency = 1; isTitle.Text = "XJ Hub v1.6.1"
 isTitle.TextColor3 = Color3.new(1,1,1); isTitle.Font = Enum.Font.GothamBold
 isTitle.TextSize = 10; isTitle.TextXAlignment = Enum.TextXAlignment.Left
 
@@ -1165,7 +1152,7 @@ local function createToggle(parent, name, def, cb, risk)
     lbl.BackgroundTransparency = 1
     lbl.Text = riskPrefix(risk)..name
     lbl.TextColor3 = riskTextColor(risk)
-    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = Exec.isMobile and 11 or 11
+    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
 
     local indW = Exec.isMobile and 40 or 36
@@ -1299,7 +1286,7 @@ local function createDropdown(parent, name, options, defIdx, cb, risk)
     end)
 end
 
--- 创建所有页面
+-- 创建页面
 createPage("主页"); createPage("玩家"); createPage("战斗"); createPage("自瞄")
 createPage("透视"); createPage("刷钱"); createPage("飞车"); createPage("杂项"); createPage("自检")
 
@@ -1346,7 +1333,6 @@ devLbl.Text = Exec.name.." · "..math.floor(vp.X).."x"..math.floor(vp.Y)
 devLbl.TextColor3 = Color3.fromRGB(190,130,255); devLbl.Font = Enum.Font.Gotham
 devLbl.TextSize = 10; devLbl.TextXAlignment = Enum.TextXAlignment.Left
 
--- 数据卡
 local statsCard = Instance.new("Frame", pages["主页"])
 statsCard.Size = UDim2.new(1, 0, 0, 55)
 statsCard.BackgroundColor3 = Color3.fromRGB(28,28,40)
@@ -1462,7 +1448,7 @@ createSlider(pages["飞车"], "飞行速度", 10, 300, 50, function(v) S.flySpee
 createToggle(pages["杂项"], "隐身", false, function(v) S.ghost=v end, "safe")
 createToggle(pages["杂项"], "防布娃娃", false, function(v) S.noRagdoll=v end, "safe")
 
--- 自检页
+-- 自检
 local selfCard = Instance.new("Frame", pages["自检"])
 selfCard.Size = UDim2.new(1, 0, 0, 240)
 selfCard.BackgroundColor3 = Color3.fromRGB(20,20,30)
@@ -1524,13 +1510,12 @@ local function runTests()
     lines[#lines+1] = ""
     lines[#lines+1] = string.format("结果: %d / %d", pass, pass+fail)
     lines[#lines+1] = "设备: "..(Exec.isIOS and "iOS" or Exec.isAndroid and "Android" or "桌面")
-    lines[#lines+1] = "Hook: "..tostring(Exec.hasHook).." | Drawing: "..tostring(Exec.hasDrawing)
     selfOut.Text = table.concat(lines, "\n")
     notify("自检完成", string.format("%d 通过 / %d 失败", pass, fail), fail==0 and "success" or "warn", 2)
 end
 runTestBtn.MouseButton1Click:Connect(runTests)
 
--- 右键自瞄 (桌面) + 触控
+-- 右键自瞄 (桌面)
 UIS.InputBegan:Connect(function(i, g)
     if g then return end
     if i.UserInputType == Enum.UserInputType.MouseButton2 then S.aimbot.keyHeld = true end
@@ -1539,7 +1524,9 @@ UIS.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton2 then S.aimbot.keyHeld = false end
 end)
 
--- 移动端瞄准按钮
+-- ============================================================
+-- 移动端瞄准按钮 (v1.6.1 修复: InputBegan/InputEnded 通用)
+-- ============================================================
 if Exec.isMobile then
     local aimBtn = Instance.new("TextButton", screen)
     aimBtn.Size = UDim2.new(0, 70, 0, 70)
@@ -1551,10 +1538,10 @@ if Exec.isMobile then
     aimBtn.Font = Enum.Font.GothamBold; aimBtn.TextSize = 13
     aimBtn.BorderSizePixel = 0
     aimBtn.ZIndex = 40
-    aimBtn.Visible = false  -- 默认隐藏, 用户开启自瞄后显示
+    aimBtn.Visible = false
     Instance.new("UICorner", aimBtn).CornerRadius = UDim.new(1, 0)
 
-    -- 当自瞄开启时显示按钮
+    -- 显示控制
     task.spawn(function()
         while screen.Parent do
             pcall(function() aimBtn.Visible = S.aimbot.enabled end)
@@ -1562,14 +1549,23 @@ if Exec.isMobile then
         end
     end)
 
-    aimBtn.MouseButton1Down:Connect(function() S.aimbot.keyHeld = true end)
-    aimBtn.MouseButton1Up:Connect(function() S.aimbot.keyHeld = false end)
-    aimBtn.TouchLongPress:Connect(function() S.aimbot.keyHeld = true end)
-    aimBtn.TouchEnded:Connect(function() S.aimbot.keyHeld = false end)
+    -- ✅ 通用输入处理 (iOS/Android/桌面 全兼容)
+    aimBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            S.aimbot.keyHeld = true
+        end
+    end)
+    aimBtn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            S.aimbot.keyHeld = false
+        end
+    end)
 end
 
 -- ============================================================
--- 加载动画 (简化)
+-- 加载动画
 -- ============================================================
 local loading = Instance.new("Frame", screen)
 loading.Size = UDim2.new(1, 0, 1, 0)
@@ -1598,7 +1594,7 @@ lLT.Font = Enum.Font.GothamBlack; lLT.TextSize = 20; lLT.ZIndex = 103
 
 local lTitle = Instance.new("TextLabel", lCard)
 lTitle.Size = UDim2.new(1, 0, 0, 14); lTitle.Position = UDim2.new(0, 0, 0, 56)
-lTitle.BackgroundTransparency = 1; lTitle.Text = "XJ HUB 1.6"
+lTitle.BackgroundTransparency = 1; lTitle.Text = "XJ HUB 1.6.1"
 lTitle.TextColor3 = Color3.new(1,1,1); lTitle.Font = Enum.Font.GothamBold
 lTitle.TextSize = 12; lTitle.ZIndex = 102
 
@@ -1640,8 +1636,8 @@ task.spawn(function()
         main.Visible = true
     end)
     task.wait(0.5)
-    notify("XJ Hub", "v1.6 加载完成", "success", 2.5)
+    notify("XJ Hub", "v1.6.1 加载完成", "success", 2.5)
     pcall(runTests)
 end)
 
-log("v1.6 启动完成")
+log("v1.6.1 启动完成")
