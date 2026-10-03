@@ -1,6 +1,6 @@
 -- ============================================================
--- XJ Hub v1.5 · 移动端全机型适配版
--- 修复: 闪退 / Drawing兼容 / UI自适应 / 触控优化
+-- XJ Hub v1.6 · 移动端安全版 (iOS/Android 全适配)
+-- 关键: iOS Delta 禁用 Hook, 保留全部 UI 功能
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -11,235 +11,85 @@ local Tween   = game:GetService("TweenService")
 local WS      = game:GetService("Workspace")
 local LP      = Players.LocalPlayer
 
-local function ok(m)  print("[XJ] ✅ "..m) end
-local function inf(m) print("[XJ] ℹ️ "..m) end
-inf("XJ Hub v1.5 加载中")
+local function log(m) pcall(function() print("[XJ] "..m) end) end
+log("v1.6 启动")
 
 -- ============================================================
--- 设备与能力检测 (关键: 全部 pcall 包裹)
+-- 第一步: 设备 + 执行器检测 (最关键)
 -- ============================================================
-local Device = {
-    isMobile = UIS.TouchEnabled and not UIS.MouseEnabled,
-    isTablet = false,
-    screenW = 0, screenH = 0, uiScale = 1, uiW = 460, uiH = 340,
-}
+local Exec = { name="未知", isMobile=false, isIOS=false, isAndroid=false,
+               isDelta=false, isCodex=false, isArceus=false,
+               hasHook=false, hasDrawing=false, hasGetGC=false,
+               hasFirePP=false, hasHui=false, hasGetConn=false }
+
+-- 设备判断
+Exec.isMobile = UIS.TouchEnabled and not UIS.MouseEnabled
 local cam0 = WS.CurrentCamera
 local vp = cam0 and cam0.ViewportSize or Vector2.new(1280, 720)
-Device.screenW, Device.screenH = vp.X, vp.Y
-Device.isTablet = vp.X >= 900
 
--- 三档自适应
-if Device.isMobile then
-    if Device.isTablet then
-        Device.uiScale = math.clamp(math.min(vp.X / 700, vp.Y / 500), 0.7, 1)
-        Device.uiW, Device.uiH = 420, 320
-    else
-        Device.uiScale = math.clamp(math.min((vp.X - 20) / 480, (vp.Y - 20) / 360), 0.5, 0.9)
-        Device.uiW, Device.uiH = 400, 300
+-- 执行器名称
+pcall(function()
+    if type(identifyexecutor) == "function" then
+        Exec.name = tostring(identifyexecutor()) or "未知"
     end
-else
-    Device.uiScale = math.clamp(math.min((vp.X - 40) / 500, (vp.Y - 80) / 380), 0.75, 1)
-end
-inf("设备: "..(Device.isMobile and (Device.isTablet and "平板" or "手机") or "桌面")
-    .." · "..math.floor(vp.X).."x"..math.floor(vp.Y).." · 缩放 "..string.format("%.2f", Device.uiScale))
+end)
 
-local CAP = {}
-local function cap(n, f)
-    local v = false
-    pcall(function() v = f() end)
-    CAP[n] = v
-    return v
-end
-cap("hookmm",   function() return type(hookmetamethod)=="function" end)
-cap("newcc",    function() return type(newcclosure)=="function" end)
-cap("checkcl",  function() return type(checkcaller)=="function" end)
-cap("getgc",    function() return type(getgc)=="function" end)
-cap("gethui",   function() return type(gethui)=="function" end)
-cap("drawing",  function() return type(Drawing)=="table" and type(Drawing.new)=="function" end)
-cap("firepp",   function() return type(fireproximityprompt)=="function" end)
-cap("getrawmt", function() return type(getrawmetatable)=="function" end)
-cap("setro",    function() return type(setreadonly)=="function" end)
-cap("getconn",  function() return type(getconnections)=="function" end)
-cap("getcall",  function() return type(getcallingscript)=="function" end)
-cap("identify", function() return type(identifyexecutor)=="function" end)
+-- 系统判断 (通过执行器名 + UserInputService)
+local uname = Exec.name:lower()
+Exec.isDelta   = uname:find("delta") ~= nil
+Exec.isCodex   = uname:find("codex") ~= nil
+Exec.isArceus  = uname:find("arceus") ~= nil
+Exec.isIOS     = Exec.isDelta or Exec.isCodex or uname:find("ios") ~= nil
+    or (Exec.isMobile and uname:find("mac") ~= nil)
+Exec.isAndroid = Exec.isMobile and not Exec.isIOS
 
-local exeName = "未知"
-pcall(function() exeName = identifyexecutor() or "未知" end)
-inf("执行器: "..exeName)
+-- 能力检测 (全部 pcall 包裹)
+local function tryCap(f) local v=false; pcall(function() v=f() end); return v end
+Exec.hasHook     = tryCap(function() return type(hookmetamethod)=="function" and type(newcclosure)=="function" end)
+Exec.hasDrawing  = tryCap(function() return type(Drawing)=="table" and type(Drawing.new)=="function" end)
+Exec.hasGetGC    = tryCap(function() return type(getgc)=="function" end)
+Exec.hasFirePP   = tryCap(function() return type(fireproximityprompt)=="function" end)
+Exec.hasHui      = tryCap(function() return type(gethui)=="function" end)
+Exec.hasGetConn  = tryCap(function() return type(getconnections)=="function" end)
 
--- 移动端低配模式: 关闭部分高开销功能
-local LOW_END = Device.isMobile and not Device.isTablet
-if LOW_END then
-    CAP.drawing = false  -- 手机端 Drawing 强制禁用, 用 BillboardGui 替代
-    inf("低配模式: Drawing 已禁用, ESP 使用 BillboardGui")
+-- 关键规则: iOS 上强制禁用 Hook
+if Exec.isIOS then
+    Exec.hasHook = false
+    log("iOS 检测: Hook 层已强制禁用")
 end
+
+-- 关键规则: 手机端禁用 Drawing (用 BillboardGui 替代)
+if Exec.isMobile then
+    Exec.hasDrawing = false
+    log("移动端: Drawing 已禁用")
+end
+
+log(string.format("设备: %s | 执行器: %s | Hook: %s | Drawing: %s",
+    Exec.isMobile and (Exec.isIOS and "iOS" or "Android") or "桌面",
+    Exec.name, tostring(Exec.hasHook), tostring(Exec.hasDrawing)))
 
 -- ============================================================
--- UI 根 (安全创建)
+-- 第二步: ScreenGui 创建 (多路径容错)
 -- ============================================================
 local uiParent
-pcall(function()
-    if CAP.gethui then uiParent = gethui() end
-end)
-if not uiParent then
-    pcall(function() uiParent = game:GetService("CoreGui") end)
-end
-if not uiParent then
-    pcall(function() uiParent = LP:WaitForChild("PlayerGui", 5) end)
-end
+if Exec.hasHui then pcall(function() uiParent = gethui() end) end
+if not uiParent then pcall(function() uiParent = game:GetService("CoreGui") end) end
+if not uiParent then pcall(function() uiParent = LP:WaitForChild("PlayerGui", 5) end) end
 if not uiParent then uiParent = game:GetService("CoreGui") end
 
-local old = uiParent:FindFirstChild("XJHubUI")
-if old then pcall(function() old:Destroy() end) end
+local oldGui = uiParent:FindFirstChild("XJHubUI")
+if oldGui then pcall(function() oldGui:Destroy() end) end
 
-local screen
-local okScreen, errScreen = pcall(function()
-    screen = Instance.new("ScreenGui")
-    screen.Name = "RBX_"..tostring(math.random(100000,999999))
-    screen.ResetOnSpawn = false
-    screen.IgnoreGuiInset = true
-    screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screen.Parent = uiParent
-end)
-if not okScreen then
-    warn("[XJ] ScreenGui 创建失败: "..tostring(errScreen))
-    return
-end
-ok("ScreenGui")
+local screen = Instance.new("ScreenGui")
+screen.Name = "XJHubUI"
+screen.ResetOnSpawn = false
+pcall(function() screen.IgnoreGuiInset = true end)
+pcall(function() screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling end)
+screen.Parent = uiParent
+log("ScreenGui 已创建")
 
 -- ============================================================
--- 属性欺骗 (v1.5 安全版 - 无 traceback)
--- ============================================================
--- 只做最轻量的操作: 拦截反作弊模块的 WalkSpeed 读取
--- 关键: 用 getcallingscript 代替 traceback, 移动端友好
-local SPOOF = { installed=false, count=0, mode="off" }
-
-if CAP.hookmm and CAP.getrawmt and CAP.setro and not LOW_END then
-    local okHook, hookErr = pcall(function()
-        local mt = getrawmetatable(game)
-        if not mt or not mt.__index then error("no __index") end
-        local oldIdx = mt.__index
-        setreadonly(mt, false)
-        mt.__index = newcclosure(function(self, key)
-            -- 只在反作弊脚本读取时返回伪造值
-            if not checkcaller() then
-                local okk, cls = pcall(function() return self.ClassName end)
-                if okk and cls == "Humanoid" then
-                    if key == "WalkSpeed" or key == "JumpPower" or key == "FloorMaterial" then
-                        -- 用 getcallingscript 判断调用来源 (轻量)
-                        local src = nil
-                        if CAP.getcall then
-                            pcall(function() src = getcallingscript() end)
-                        end
-                        if src and (src.Name:find("Anti") or src.Name:find("Detect")
-                            or src.Name:find("Security") or src.Name:find("Check")) then
-                            SPOOF.count = SPOOF.count + 1
-                            if key == "WalkSpeed" then return 16 end
-                            if key == "JumpPower" then return 50 end
-                            return Enum.Material.Plastic
-                        end
-                    end
-                end
-            end
-            return oldIdx(self, key)
-        end)
-        setreadonly(mt, true)
-        SPOOF.installed = true
-        SPOOF.mode = "full"
-    end)
-    if okHook then
-        ok("属性欺骗 (getcallingscript 模式)")
-    else
-        no("属性欺骗失败: "..tostring(hookErr))
-    end
-else
-    inf("属性欺骗已跳过 (执行器不支持或低配模式)")
-end
-
--- ============================================================
--- 远程拦截 (安全版)
--- ============================================================
-local BLOCK_PAT = {
-    "^detect", "^report", "^flag$", "^ban$", "^kick$", "^warn$",
-    "^cheat", "^suspicious$", "^getPlayerData$", "^getSecret$",
-    "^getPlayerBanHistory$", "^getPlayerInGame$", "^getPlayerServerEncounters$",
-}
-local BLOCKED = 0
-if CAP.hookmm and CAP.getrawmt and CAP.setro and not LOW_END then
-    pcall(function()
-        local mt = getrawmetatable(game)
-        if mt and mt.__namecall then
-            local oldNC = mt.__namecall
-            setreadonly(mt, false)
-            mt.__namecall = newcclosure(function(self, ...)
-                local method = getnamecallmethod()
-                if not checkcaller() then
-                    if method == "Kick" and self == LP then return end
-                    if method == "FireServer" or method == "InvokeServer" then
-                        local nm = self.Name
-                        if nm then
-                            local low = nm:lower()
-                            for _, p in ipairs(BLOCK_PAT) do
-                                if low:match(p) then
-                                    BLOCKED = BLOCKED + 1
-                                    return true
-                                end
-                            end
-                        end
-                    end
-                end
-                return oldNC(self, ...)
-            end)
-            setreadonly(mt, true)
-        end
-    end)
-    ok("远程拦截")
-end
-
--- ============================================================
--- 远程节流
--- ============================================================
-local Throttle = {}
-local function throttledFire(remote, minGap, ...)
-    local key = tostring(remote)
-    local now = tick()
-    if now - (Throttle[key] or 0) < minGap + math.random() * minGap * 0.5 then return end
-    Throttle[key] = now
-    local okv, err = pcall(function() return remote:FireServer(...) end)
-    if not okv then end
-end
-local function throttledInvoke(remote, minGap, ...)
-    local args = {...}
-    local key = tostring(remote)..":"..tostring(args[1])
-    local now = tick()
-    if now - (Throttle[key] or 0) < minGap + math.random() * minGap * 0.5 then return end
-    Throttle[key] = now
-    local okv, err = pcall(function() return remote:InvokeServer(...) end)
-    if not okv then end
-end
-
--- ============================================================
--- 游戏框架 (全部 pcall)
--- ============================================================
-local remote, playerEvent, playerFunc
-pcall(function() remote = RS:WaitForChild("Remote", 10) end)
-if remote then
-    pcall(function() playerEvent = remote:WaitForChild("PlayerEvent", 10) end)
-    pcall(function() playerFunc = remote:WaitForChild("PlayerFunc", 10) end)
-end
-
-local Core, Character, Controls
-pcall(function()
-    local fw = LP:WaitForChild("PlayerScripts", 10):WaitForChild("Framework", 10)
-    Core = require(fw:WaitForChild("Core", 10))
-    Character = require(fw:WaitForChild("Character", 10))
-end)
-pcall(function()
-    Controls = require(LP.PlayerScripts:WaitForChild("PlayerModule")):GetControls()
-end)
-
--- ============================================================
--- 工具
+-- 第三步: 工具函数
 -- ============================================================
 local function getChar(p)
     p = p or LP
@@ -253,6 +103,29 @@ local function isOnGround(h)
     return s == Enum.HumanoidStateType.Landed or s == Enum.HumanoidStateType.Running or s == Enum.HumanoidStateType.RunningNoPhysics
 end
 
+-- ============================================================
+-- 第四步: 游戏框架 (全 pcall)
+-- ============================================================
+local remote, playerEvent, playerFunc
+pcall(function() remote = RS:WaitForChild("Remote", 8) end)
+if remote then
+    pcall(function() playerEvent = remote:WaitForChild("PlayerEvent", 8) end)
+    pcall(function() playerFunc = remote:WaitForChild("PlayerFunc", 8) end)
+end
+
+local Core, Character, Controls
+pcall(function()
+    local fw = LP:WaitForChild("PlayerScripts", 8):WaitForChild("Framework", 8)
+    Core = require(fw:WaitForChild("Core", 8))
+    Character = require(fw:WaitForChild("Character", 8))
+end)
+pcall(function()
+    Controls = require(LP.PlayerScripts:WaitForChild("PlayerModule")):GetControls()
+end)
+
+-- ============================================================
+-- 第五步: 状态表
+-- ============================================================
 local S = {
     stamina=false, food=false, infiniteAmmo=false, rapidFire=false,
     speedEnabled=false, speedValue=100,
@@ -264,7 +137,7 @@ local S = {
             friendCheck=false,wallCheck=false,teamCheck=false,crewCheck=false},
     esp={enabled=false,name=true,distance=true,health=true,team=true,highlight=true,bar=true,colorByTeam=true},
     autoMoney=false, autoFarmer=false, autoMission=false, autoHack=false,
-    autoTaxi=false, taxiSafe=false, taxiDelayMode="随机时间",
+    autoTaxi=false, taxiSafe=false,
     autoGolf=false,
     flyEnabled=false, flySpeed=50, noclip=false,
     ghost=false, noRagdoll=false,
@@ -283,12 +156,13 @@ local function teamColor(p) return TEAM_COLORS[p.Team and p.Team.Name] or Color3
 local function teamLabel(p) return TEAM_NAMES[p.Team and p.Team.Name] or (p.Team and p.Team.Name or "无") end
 local CREW = { Civilian=true, Delivery=true, Transit=true }
 
+-- 好友
 local friendSet = {}
 task.spawn(function()
     pcall(function()
         local cursor, n = "", 0
         repeat
-            n = n + 1; if n > 20 then break end
+            n = n + 1; if n > 15 then break end
             local page = LP:GetFriendsAsync(cursor); if not page then break end
             for _, f in ipairs(page:GetCurrentPage()) do friendSet[f.Id] = true end
             cursor = page.Cursor
@@ -297,11 +171,12 @@ task.spawn(function()
 end)
 local function isFriend(p) return friendSet[p.UserId] == true end
 
+-- 性能
 local stats = { fps=0, frames=0, lastTick=tick(), ping=0, espAvg=0 }
 task.spawn(function()
     while screen.Parent do
         pcall(function() stats.ping = math.floor((LP:GetNetworkPing() or 0) * 1000) end)
-        task.wait(1)
+        task.wait(1.5)
     end
 end)
 
@@ -313,116 +188,67 @@ local userInfo = {
 }
 
 -- ============================================================
--- 通知 (移动端简化 - 最多 3 条)
+-- 第六步: 通知 (移动端轻量)
 -- ============================================================
 local notifyHolder = Instance.new("Frame", screen)
-notifyHolder.Size = UDim2.new(0, 260, 1, -20)
-notifyHolder.Position = UDim2.new(1, -270, 0, 10)
+notifyHolder.Size = UDim2.new(0, 220, 1, -20)
+notifyHolder.Position = UDim2.new(1, -230, 0, 10)
 notifyHolder.BackgroundTransparency = 1
 notifyHolder.ZIndex = 200
 local nLayout = Instance.new("UIListLayout", notifyHolder)
-nLayout.Padding = UDim.new(0, 6)
+nLayout.Padding = UDim.new(0, 5)
 nLayout.SortOrder = Enum.SortOrder.LayoutOrder
 local notifyOrder = 0
 
 local function notify(title, desc, kind, duration)
-    -- 移动端限制同时通知数量
-    local count = 0
-    for _, c in ipairs(notifyHolder:GetChildren()) do
-        if c:IsA("Frame") then count = count + 1 end
-    end
-    if count >= 3 then
-        for _, c in ipairs(notifyHolder:GetChildren()) do
-            if c:IsA("Frame") and c.LayoutOrder == notifyOrder - 2 then
-                c:Destroy(); break
-            end
-        end
-    end
-
-    kind = kind or "info"; duration = duration or 2.5
+    if not screen or not screen.Parent then return end
+    kind = kind or "info"; duration = duration or 2
     notifyOrder = notifyOrder + 1
     local color = kind=="success" and Color3.fromRGB(60,220,100)
         or kind=="warn" and Color3.fromRGB(255,200,60)
         or kind=="error" and Color3.fromRGB(255,80,80)
         or Color3.fromRGB(100,180,255)
-
     local card = Instance.new("Frame", notifyHolder)
-    card.Size = UDim2.new(1, 0, 0, 46)
+    card.Size = UDim2.new(1, 0, 0, 42)
     card.BackgroundColor3 = Color3.fromRGB(18,18,26)
     card.BackgroundTransparency = 0.1
     card.BorderSizePixel = 0
     card.LayoutOrder = notifyOrder
-    card.ZIndex = 201
     Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
     local stroke = Instance.new("UIStroke", card)
     stroke.Color = color; stroke.Thickness = 1.5
-
-    local acc = Instance.new("Frame", card)
-    acc.Size = UDim2.new(0, 4, 0, 34); acc.Position = UDim2.new(0, 6, 0.5, -17)
-    acc.BackgroundColor3 = color; acc.BorderSizePixel = 0
-    Instance.new("UICorner", acc).CornerRadius = UDim.new(1, 0)
-
     local tLbl = Instance.new("TextLabel", card)
-    tLbl.Size = UDim2.new(1, -30, 0, 14); tLbl.Position = UDim2.new(0, 20, 0, 6)
+    tLbl.Size = UDim2.new(1, -20, 0, 14); tLbl.Position = UDim2.new(0, 10, 0, 5)
     tLbl.BackgroundTransparency = 1; tLbl.Text = title
     tLbl.TextColor3 = color; tLbl.Font = Enum.Font.GothamBold
     tLbl.TextSize = 11; tLbl.TextXAlignment = Enum.TextXAlignment.Left
-
     local dLbl = Instance.new("TextLabel", card)
-    dLbl.Size = UDim2.new(1, -30, 0, 16); dLbl.Position = UDim2.new(0, 20, 0, 22)
+    dLbl.Size = UDim2.new(1, -20, 0, 16); dLbl.Position = UDim2.new(0, 10, 0, 20)
     dLbl.BackgroundTransparency = 1; dLbl.Text = desc
     dLbl.TextColor3 = Color3.fromRGB(210,210,225)
     dLbl.Font = Enum.Font.Gotham; dLbl.TextSize = 10
     dLbl.TextXAlignment = Enum.TextXAlignment.Left
-
     card.Position = UDim2.new(1, 40, 0, 0)
-    Tween:Create(card, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-        Position = UDim2.new(0, 0, 0, 0)
-    }):Play()
-
+    Tween:Create(card, TweenInfo.new(0.25), { Position = UDim2.new(0, 0, 0, 0) }):Play()
     task.spawn(function()
         task.wait(duration)
         pcall(function()
             if not card or not card.Parent then return end
-            Tween:Create(card, TweenInfo.new(0.25), { Position = UDim2.new(1, 40, 0, 0), BackgroundTransparency = 1 }):Play()
-            Tween:Create(stroke, TweenInfo.new(0.25), { Transparency = 1 }):Play()
+            Tween:Create(card, TweenInfo.new(0.2), { Position = UDim2.new(1, 40, 0, 0), BackgroundTransparency = 1 }):Play()
+            Tween:Create(stroke, TweenInfo.new(0.2), { Transparency = 1 }):Play()
             Tween:Create(tLbl, TweenInfo.new(0.2), { TextTransparency = 1 }):Play()
             Tween:Create(dLbl, TweenInfo.new(0.2), { TextTransparency = 1 }):Play()
-            task.wait(0.3)
+            task.wait(0.25)
             if card then card:Destroy() end
         end)
     end)
 end
 
 -- ============================================================
--- 连接清理 (安全版)
+-- 第七步: 物理功能模块
 -- ============================================================
-local CLEANED = 0
-if CAP.getconn and not LOW_END then
-    task.spawn(function()
-        task.wait(3)
-        pcall(function()
-            local conns = getconnections(RunSvc.Heartbeat)
-            for _, conn in ipairs(conns) do
-                local src = nil
-                pcall(function()
-                    if CAP.getcall then
-                        local s = getcallingscript(conn.Function)
-                        if s then src = s.Name end
-                    end
-                end)
-                if src and (src:find("Anti") or src:find("Detect") or src:find("Security")) then
-                    pcall(function() conn:Disconnect() end)
-                    CLEANED = CLEANED + 1
-                end
-            end
-        end)
-    end)
-end
 
--- ============================================================
--- 安全移动
--- ============================================================
+-- 速度 (BodyVelocity)
 local speedBV = nil
 local function refreshSpeed()
     local _, h, r = getChar(); if not h or not r then return end
@@ -442,10 +268,8 @@ local function refreshSpeed()
     end
 end
 
--- ============================================================
 -- 飞行
--- ============================================================
-local Fly = { align=nil, att=nil, conn=nil, bv=nil, bg=nil }
+local Fly = {}
 local function stopFly()
     pcall(function()
         if Fly.conn then Fly.conn:Disconnect() end
@@ -454,7 +278,7 @@ local function stopFly()
         if Fly.bv then Fly.bv:Destroy() end
         if Fly.bg then Fly.bg:Destroy() end
     end)
-    Fly.conn, Fly.align, Fly.att, Fly.bv, Fly.bg = nil, nil, nil, nil, nil
+    Fly = {}
     local _, h = getChar()
     if h then h.PlatformStand=false; h.AutoRotate=true end
 end
@@ -489,9 +313,7 @@ local function startFly()
     end)
 end
 
--- ============================================================
--- Noclip (缓存优化)
--- ============================================================
+-- Noclip
 local Noclip = { conn=nil, cache={}, parts={} }
 local function rebuildNoclipParts()
     Noclip.parts = {}
@@ -504,8 +326,7 @@ local function rebuildNoclipParts()
     end
 end
 LP.CharacterAdded:Connect(function()
-    task.wait(0.5)
-    rebuildNoclipParts()
+    task.wait(0.5); rebuildNoclipParts()
 end)
 task.spawn(function() task.wait(1); rebuildNoclipParts() end)
 
@@ -536,7 +357,7 @@ local function startNoclip()
 end
 
 -- ============================================================
--- 自瞄
+-- 第八步: 自瞄
 -- ============================================================
 local PART_MAP = { ["头部"]={"Head"}, ["胸部"]={"UpperTorso","Torso"} }
 local function getTargetPart(c)
@@ -566,13 +387,16 @@ local function hasWall(tPart, tChar)
     local hit = WS:Raycast(cam.CFrame.Position, tPart.Position - cam.CFrame.Position, params)
     return not hit or hit.Instance:IsDescendantOf(tChar)
 end
-local fovCircle, tracerLine
-if CAP.drawing then
-    pcall(function()
-        fovCircle = Drawing.new("Circle"); fovCircle.Filled=false; fovCircle.NumSides=48; fovCircle.Visible=false
-        tracerLine = Drawing.new("Line"); tracerLine.Visible = false
-    end)
-end
+
+-- 自瞄准星 (用 UI 而不是 Drawing, 因为移动端 Drawing 禁用了)
+local aimCrosshair = Instance.new("Frame", screen)
+aimCrosshair.Size = UDim2.new(0, 4, 0, 4)
+aimCrosshair.Position = UDim2.new(0.5, -2, 0.5, -2)
+aimCrosshair.BackgroundColor3 = Color3.fromRGB(255,0,0)
+aimCrosshair.BorderSizePixel = 0
+aimCrosshair.Visible = false
+aimCrosshair.ZIndex = 30
+Instance.new("UICorner", aimCrosshair).CornerRadius = UDim.new(1, 0)
 
 RunSvc.RenderStepped:Connect(function()
     stats.frames = stats.frames + 1
@@ -582,17 +406,12 @@ RunSvc.RenderStepped:Connect(function()
     if S.speedEnabled then pcall(refreshSpeed) end
     local cam = WS.CurrentCamera; if not cam then return end
     local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
-    if fovCircle then
-        pcall(function()
-            fovCircle.Position = center; fovCircle.Radius = S.aimbot.fov
-            fovCircle.Thickness = 2; fovCircle.Color = aimColor()
-            fovCircle.Visible = S.aimbot.enabled and S.aimbot.showFov
-        end)
-    end
-    if not (S.aimbot.enabled and S.aimbot.keyHeld) then
-        if tracerLine then pcall(function() tracerLine.Visible = false end) end
-        return
-    end
+    pcall(function()
+        aimCrosshair.Position = UDim2.new(0.5, -2, 0.5, -2)
+        aimCrosshair.BackgroundColor3 = aimColor()
+        aimCrosshair.Visible = S.aimbot.enabled and S.aimbot.showFov
+    end)
+    if not (S.aimbot.enabled and S.aimbot.keyHeld) then return end
     local tgt, bd = nil, S.aimbot.fov
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LP then
@@ -618,23 +437,12 @@ RunSvc.RenderStepped:Connect(function()
         end
     end
     if tgt then
-        if S.aimbot.showTracer and tracerLine then
-            pcall(function()
-                local sp = cam:WorldToViewportPoint(tgt.Position)
-                tracerLine.From = center; tracerLine.To = Vector2.new(sp.X, sp.Y)
-                tracerLine.Color = aimColor(); tracerLine.Visible = true
-            end)
-        elseif tracerLine then
-            pcall(function() tracerLine.Visible = false end)
-        end
         cam.CFrame = cam.CFrame:Lerp(CFrame.new(cam.CFrame.Position, tgt.Position), S.aimbot.smoothness)
-    elseif tracerLine then
-        pcall(function() tracerLine.Visible = false end)
     end
 end)
 
 -- ============================================================
--- 核心循环
+-- 第九步: 核心循环
 -- ============================================================
 task.spawn(function()
     while screen.Parent do
@@ -663,10 +471,9 @@ task.spawn(function()
     end
 end)
 
--- 快速射击
 task.spawn(function()
     while screen.Parent do
-        if S.rapidFire and CAP.getgc then
+        if S.rapidFire and Exec.hasGetGC then
             pcall(function()
                 for _, v in pairs(getgc(true)) do
                     if type(v) == "table" then
@@ -699,7 +506,7 @@ task.spawn(function()
                     end
                     if tgt then
                         local _, _, pr = getChar(tgt)
-                        throttledFire(playerEvent, 0.5, "damage", {
+                        playerEvent:FireServer("damage", {
                             bodyParts = {{"Head", 1}},
                             shotCode = { r.Position, (pr.Position - r.Position).Unit },
                             pos = pr.Position, target = tgt,
@@ -727,7 +534,7 @@ task.spawn(function()
                         if p ~= LP and not cuffCache[p.UserId] then
                             local _, ph, pr = getChar(p)
                             if ph and pr and ph.Health > 0 and (pr.Position - r.Position).Magnitude <= 200 then
-                                throttledInvoke(playerFunc, 2.5, "handcuff", p, false)
+                                playerFunc:InvokeServer("handcuff", p, false)
                                 cuffCache[p.UserId] = tick()
                             end
                         end
@@ -768,7 +575,7 @@ task.spawn(function()
                         end
                     end
                 end
-                if best and CAP.firepp then pcall(fireproximityprompt, best, 0) end
+                if best and Exec.hasFirePP then pcall(fireproximityprompt, best, 0) end
             end)
         end
         task.wait(1.5)
@@ -778,14 +585,14 @@ end)
 -- 自动接任务
 task.spawn(function()
     while screen.Parent do
-        if S.autoMission and playerFunc and CAP.getgc then
+        if S.autoMission and playerFunc and Exec.hasGetGC then
             pcall(function()
                 if not LP:GetAttribute("Mission") then
                     for _, v in pairs(getgc(true)) do
                         if type(v) == "table" and rawget(v, "teamJobs") then
                             for k, j in pairs(v.teamJobs) do
                                 if not j.joined then
-                                    throttledInvoke(playerFunc, 3, "talkToMission", tostring(k).."join")
+                                    playerFunc:InvokeServer("talkToMission", tostring(k).."join")
                                     break
                                 end
                             end
@@ -813,6 +620,21 @@ task.spawn(function()
             end)
         end
         task.wait(3)
+    end
+end)
+
+-- 隐身
+task.spawn(function()
+    while screen.Parent do
+        if S.ghost and playerFunc then
+            pcall(function()
+                local stuff = RS:FindFirstChild("Stuff")
+                local loc = stuff and stuff:FindFirstChild("Locations")
+                loc = loc and loc:GetChildren()[1] or nil
+                playerFunc:InvokeServer("hideCharacterLocation", loc)
+            end)
+        end
+        task.wait(4)
     end
 end)
 
@@ -846,14 +668,6 @@ local function safeTeleport(targetPos)
     task.wait(0.1)
     pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
 end
-local function getSafeWait(distance)
-    if S.taxiDelayMode == "距离测算" then
-        local d = math.clamp(distance, 2000, 6000)
-        return math.clamp(15 + (d-2000)/4000*30 + math.random()*2-1, 15, 45)
-    else
-        return distance > 2000 and math.random(15, 45) or 15
-    end
-end
 local function startTaxi()
     if Taxi.thread then return end
     local _, _, hrp0 = getChar()
@@ -872,7 +686,7 @@ local function startTaxi()
                             if S.taxiSafe then
                                 if not Taxi.origin then Taxi.origin = hrp.Position end
                                 safeTeleport(Taxi.origin)
-                                local wt = getSafeWait(distance)
+                                local wt = distance > 2000 and math.random(15, 45) or 15
                                 local start = tick()
                                 while S.autoTaxi and (tick() - start < wt) do
                                     task.wait(1)
@@ -892,9 +706,7 @@ local function startTaxi()
 end
 local function stopTaxi()
     S.autoTaxi = false; Taxi.origin = nil
-    if Taxi.thread and coroutine.status(Taxi.thread) ~= "dead" then
-        pcall(function() task.cancel(Taxi.thread) end)
-    end
+    if Taxi.thread then pcall(function() task.cancel(Taxi.thread) end) end
     Taxi.thread = nil
 end
 
@@ -906,13 +718,13 @@ local function startGolf()
         while S.autoGolf do
             pcall(function()
                 if playerFunc then
-                    throttledInvoke(playerFunc, 0.5, "miniGolf", "createLobby")
+                    playerFunc:InvokeServer("miniGolf", "createLobby")
                     task.wait(0.1)
-                    throttledInvoke(playerFunc, 0.5, "miniGolf", "setLobbyBid", { bid = 500 })
+                    playerFunc:InvokeServer("miniGolf", "setLobbyBid", { bid = 500 })
                     task.wait(0.1)
-                    throttledInvoke(playerFunc, 0.5, "miniGolf", "setLobbyReady")
+                    playerFunc:InvokeServer("miniGolf", "setLobbyReady")
                     task.wait(4)
-                    throttledInvoke(playerFunc, 0.5, "miniGolf", "shot")
+                    playerFunc:InvokeServer("miniGolf", "shot")
                 end
             end)
             task.wait(5)
@@ -922,26 +734,9 @@ local function startGolf()
 end
 local function stopGolf()
     S.autoGolf = false
-    if Golf.thread and coroutine.status(Golf.thread) ~= "dead" then
-        pcall(function() task.cancel(Golf.thread) end)
-    end
+    if Golf.thread then pcall(function() task.cancel(Golf.thread) end) end
     Golf.thread = nil
 end
-
--- 隐身
-task.spawn(function()
-    while screen.Parent do
-        if S.ghost and playerFunc then
-            pcall(function()
-                local stuff = RS:FindFirstChild("Stuff")
-                local loc = stuff and stuff:FindFirstChild("Locations")
-                loc = loc and loc:GetChildren()[1] or nil
-                playerFunc:InvokeServer("hideCharacterLocation", loc)
-            end)
-        end
-        task.wait(4)
-    end
-end)
 
 -- 无限跳
 local lastJump = 0
@@ -965,69 +760,53 @@ pcall(function()
 end)
 
 -- ============================================================
--- ESP (Drawing 优先, 移动端用 BillboardGui)
+-- 第十步: ESP (BillboardGui 移动端稳定方案)
 -- ============================================================
 local espCache = {}
-
-local function buildESPBillboard(p, char, hrp)
+local function buildESP(p, char, hrp)
     local bill = Instance.new("BillboardGui")
     bill.Name = "XJ_ESP_"..p.Name
     bill.AlwaysOnTop = true
     bill.Size = UDim2.new(0, 120, 0, 34)
     bill.StudsOffset = Vector3.new(0, 3.2, 0)
-    bill.MaxDistance = 500
+    bill.MaxDistance = 400
     bill.Adornee = hrp
     bill.Parent = screen
+
     local l1 = Instance.new("TextLabel", bill)
     l1.Size = UDim2.new(1,0,0,14); l1.BackgroundTransparency = 1
     l1.Font = Enum.Font.GothamBold; l1.TextSize = 12
     l1.TextColor3 = Color3.new(1,1,1)
     l1.TextStrokeTransparency = 0; l1.TextStrokeColor3 = Color3.new(0,0,0)
+
     local l2 = Instance.new("TextLabel", bill)
     l2.Size = UDim2.new(1,0,0,12); l2.Position = UDim2.new(0,0,0,15)
     l2.BackgroundTransparency = 1; l2.Font = Enum.Font.GothamBold
     l2.TextSize = 10; l2.TextColor3 = Color3.fromRGB(230,230,230)
     l2.TextStrokeTransparency = 0; l2.TextStrokeColor3 = Color3.new(0,0,0)
+
     local hpBg = Instance.new("Frame", bill)
     hpBg.Size = UDim2.new(1,-14,0,2); hpBg.Position = UDim2.new(0,7,1,-2)
     hpBg.BackgroundColor3 = Color3.fromRGB(20,20,30); hpBg.BorderSizePixel = 0
     Instance.new("UICorner", hpBg).CornerRadius = UDim.new(1, 0)
+
     local hpFill = Instance.new("Frame", hpBg)
     hpFill.Size = UDim2.new(1,0,1,0); hpFill.BackgroundColor3 = Color3.fromRGB(60,220,100)
     hpFill.BorderSizePixel = 0
     Instance.new("UICorner", hpFill).CornerRadius = UDim.new(1, 0)
+
     local hl = Instance.new("Highlight", char)
     hl.Name = "XJ_HL"; hl.Adornee = char
     hl.FillTransparency = 0.85; hl.OutlineTransparency = 0
     pcall(function() hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
-    return { mode="bill", bill=bill, line1=l1, line2=l2, hpBg=hpBg, hpFill=hpFill, hl=hl }
-end
 
-local function buildESPDraw(p, char, hrp)
-    local e = { mode="draw", hl=Instance.new("Highlight", char) }
-    e.hl.Name = "XJ_HL"; e.hl.Adornee = char
-    e.hl.FillTransparency = 0.85; e.hl.OutlineTransparency = 0
-    pcall(function() e.hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
-    pcall(function()
-        e.name = Drawing.new("Text"); e.name.Size=13; e.name.Font=2; e.name.Center=true
-        e.name.Outline=true; e.name.OutlineColor=Color3.new(0,0,0)
-        e.dist = Drawing.new("Text"); e.dist.Size=11; e.dist.Font=2; e.dist.Center=true
-        e.dist.Outline=true; e.dist.OutlineColor=Color3.new(0,0,0)
-        e.hpBg = Drawing.new("Line"); e.hpBg.Thickness=3
-        e.hpFill = Drawing.new("Line"); e.hpFill.Thickness=3
-    end)
-    return e
+    return { bill=bill, line1=l1, line2=l2, hpBg=hpBg, hpFill=hpFill, hl=hl }
 end
 
 local function destroyESP(e)
     pcall(function()
         if e.bill then e.bill:Destroy() end
         if e.hl then e.hl:Destroy() end
-        if e.mode == "draw" then
-            for _, k in ipairs({"name","dist","hpBg","hpFill"}) do
-                if e[k] then e[k]:Remove() end
-            end
-        end
     end)
 end
 
@@ -1040,74 +819,36 @@ task.spawn(function()
                     if p ~= LP then
                         local c, h, r = getChar(p)
                         if c and h and r and h.Health > 0 then
-                            if not espCache[p] then
-                                espCache[p] = CAP.drawing and buildESPDraw(p, c, r) or buildESPBillboard(p, c, r)
-                            end
+                            if not espCache[p] then espCache[p] = buildESP(p, c, r) end
                             local e = espCache[p]
-                            local tc = S.esp.colorByTeam and teamColor(p) or Color3.fromRGB(168,85,247)
-                            local n = p.Name
-                            if S.esp.team then n = "["..teamLabel(p).."] "..n end
-                            local _, _, mr = getChar()
-                            local dist = mr and math.floor((mr.Position - r.Position).Magnitude) or 0
-                            local hpTxt = math.floor(h.Health).."/"..math.floor(h.MaxHealth)
-
-                            if e.mode == "bill" then
-                                pcall(function()
-                                    e.bill.Adornee = r
-                                    e.line1.Text = n; e.line1.TextColor3 = tc; e.line1.Visible = S.esp.name
-                                    local parts = {}
-                                    if S.esp.distance then parts[#parts+1] = dist.."m" end
-                                    if S.esp.health then parts[#parts+1] = hpTxt end
-                                    e.line2.Text = table.concat(parts, " · ")
-                                    e.line2.Visible = S.esp.distance or S.esp.health
-                                    if S.esp.bar then
-                                        e.hpBg.Visible = true
-                                        e.hpFill.Size = UDim2.new(math.clamp(h.Health/h.MaxHealth,0,1),0,1,0)
-                                        local rt = h.Health/h.MaxHealth
-                                        e.hpFill.BackgroundColor3 = rt>0.6 and Color3.fromRGB(60,220,100)
-                                            or rt>0.3 and Color3.fromRGB(255,200,0)
-                                            or Color3.fromRGB(255,60,60)
-                                    else e.hpBg.Visible = false end
-                                end)
-                            else
-                                pcall(function()
-                                    local pos, on = WS.CurrentCamera:WorldToViewportPoint(r.Position + Vector3.new(0,3.2,0))
-                                    if on then
-                                        e.name.Visible = S.esp.name
-                                        e.name.Text = n; e.name.Color = tc
-                                        e.name.Position = Vector2.new(pos.X, pos.Y-22)
-                                        local txt = ""
-                                        if S.esp.distance then txt = dist.."m" end
-                                        if S.esp.health then txt = txt..(txt~="" and " · " or "")..hpTxt end
-                                        e.dist.Visible = (S.esp.distance or S.esp.health) and txt ~= ""
-                                        e.dist.Text = txt; e.dist.Color = Color3.new(0.9,0.9,0.9)
-                                        e.dist.Position = Vector2.new(pos.X, pos.Y-8)
-                                        if S.esp.bar then
-                                            local w=40; local x1,x2 = pos.X-w/2, pos.X+w/2
-                                            local y = pos.Y+8
-                                            e.hpBg.Visible = true; e.hpFill.Visible = true
-                                            e.hpBg.From = Vector2.new(x1,y); e.hpBg.To = Vector2.new(x2,y)
-                                            e.hpBg.Color = Color3.fromRGB(20,20,30)
-                                            local rt = math.clamp(h.Health/h.MaxHealth,0,1)
-                                            e.hpFill.From = Vector2.new(x1,y)
-                                            e.hpFill.To = Vector2.new(x1+w*rt, y)
-                                            e.hpFill.Color = rt>0.6 and Color3.fromRGB(60,220,100)
-                                                or rt>0.3 and Color3.fromRGB(255,200,0)
-                                                or Color3.fromRGB(255,60,60)
-                                        else e.hpBg.Visible=false; e.hpFill.Visible=false end
-                                    else
-                                        e.name.Visible=false; e.dist.Visible=false
-                                        e.hpBg.Visible=false; e.hpFill.Visible=false
-                                    end
-                                end)
-                            end
-                            if e.hl then
-                                pcall(function()
+                            if e and e.bill then
+                                e.bill.Adornee = r
+                                local tc = S.esp.colorByTeam and teamColor(p) or Color3.fromRGB(168,85,247)
+                                local n = p.Name
+                                if S.esp.team then n = "["..teamLabel(p).."] "..n end
+                                e.line1.Text = n; e.line1.TextColor3 = tc; e.line1.Visible = S.esp.name
+                                local parts = {}
+                                if S.esp.distance then
+                                    local _, _, mr = getChar()
+                                    if mr then parts[#parts+1] = math.floor((mr.Position - r.Position).Magnitude).."m" end
+                                end
+                                if S.esp.health then parts[#parts+1] = math.floor(h.Health).."/"..math.floor(h.MaxHealth) end
+                                e.line2.Text = table.concat(parts, " · ")
+                                e.line2.Visible = S.esp.distance or S.esp.health
+                                if S.esp.bar then
+                                    e.hpBg.Visible = true
+                                    e.hpFill.Size = UDim2.new(math.clamp(h.Health/h.MaxHealth,0,1),0,1,0)
+                                    local rt = h.Health/h.MaxHealth
+                                    e.hpFill.BackgroundColor3 = rt>0.6 and Color3.fromRGB(60,220,100)
+                                        or rt>0.3 and Color3.fromRGB(255,200,0)
+                                        or Color3.fromRGB(255,60,60)
+                                else e.hpBg.Visible = false end
+                                if e.hl then
                                     if e.hl.Parent ~= c then e.hl.Parent = c end
                                     e.hl.Adornee = c
                                     e.hl.FillColor = tc; e.hl.OutlineColor = tc
                                     e.hl.Enabled = S.esp.highlight
-                                end)
+                                end
                             end
                         else
                             if espCache[p] then destroyESP(espCache[p]); espCache[p] = nil end
@@ -1119,15 +860,26 @@ task.spawn(function()
             for p, e in pairs(espCache) do destroyESP(e); espCache[p] = nil end
         end
         stats.espAvg = stats.espAvg * 0.9 + (tick() - t0) * 0.1
-        task.wait(Device.isMobile and 0.25 or 0.15)
+        task.wait(Exec.isMobile and 0.3 or 0.15)
     end
 end)
 
 -- ============================================================
--- UI 构建 (移动端适配)
+-- 第十一步: UI 构建 (移动端适配)
 -- ============================================================
-local W, H = Device.uiW, Device.uiH
-local uiScale = Device.uiScale
+local W, H, uiScale
+if Exec.isMobile then
+    if vp.X >= 800 then  -- 平板
+        W, H = 400, 300
+        uiScale = math.clamp(math.min(vp.X/650, vp.Y/500), 0.7, 0.95)
+    else  -- 手机
+        W, H = 380, 280
+        uiScale = math.clamp(math.min((vp.X-20)/420, (vp.Y-20)/320), 0.55, 0.9)
+    end
+else
+    W, H = 460, 340
+    uiScale = math.clamp(math.min((vp.X-40)/500, (vp.Y-80)/380), 0.75, 1)
+end
 
 local main = Instance.new("Frame", screen)
 main.Size = UDim2.new(0, W, 0, H)
@@ -1139,68 +891,60 @@ main.ClipsDescendants = true
 main.Visible = false
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
 Instance.new("UIScale", main).Scale = uiScale
-local mbg = Instance.new("UIGradient", main)
-mbg.Rotation = 135
-mbg.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(22,16,38)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(14,14,20)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(20,12,32)),
-})
+
 local mstr = Instance.new("UIStroke", main)
 mstr.Color = Color3.fromRGB(168,85,247); mstr.Thickness = 1.5
 
+local TOP_H = Exec.isMobile and 36 or 42
 local topbar = Instance.new("Frame", main)
-topbar.Size = UDim2.new(1, 0, 0, 40)
+topbar.Size = UDim2.new(1, 0, 0, TOP_H)
 topbar.BackgroundColor3 = Color3.fromRGB(22,22,32)
 topbar.BackgroundTransparency = 0.2
 topbar.BorderSizePixel = 0
 Instance.new("UICorner", topbar).CornerRadius = UDim.new(0, 14)
 
 local logo = Instance.new("Frame", topbar)
-logo.Size = UDim2.new(0, 26, 0, 26); logo.Position = UDim2.new(0, 8, 0.5, -13)
-logo.BackgroundColor3 = Color3.new(1,1,1); logo.BorderSizePixel = 0
-Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 7)
-local lg = Instance.new("UIGradient", logo)
-lg.Rotation = 45
-lg.Color = ColorSequence.new(Color3.fromRGB(236,72,153), Color3.fromRGB(168,85,247))
+logo.Size = UDim2.new(0, 24, 0, 24); logo.Position = UDim2.new(0, 6, 0.5, -12)
+logo.BackgroundColor3 = Color3.fromRGB(168,85,247)
+logo.BorderSizePixel = 0
+Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 6)
 local lTxt = Instance.new("TextLabel", logo)
 lTxt.Size = UDim2.new(1,0,1,0); lTxt.BackgroundTransparency = 1
 lTxt.Text = "嘉"; lTxt.TextColor3 = Color3.new(1,1,1)
-lTxt.Font = Enum.Font.GothamBlack; lTxt.TextSize = 14
+lTxt.Font = Enum.Font.GothamBlack; lTxt.TextSize = 13
 
 local title = Instance.new("TextLabel", topbar)
-title.Size = UDim2.new(0, 200, 0, 16); title.Position = UDim2.new(0, 40, 0, 4)
-title.BackgroundTransparency = 1; title.Text = "XJ HUB 1.5"
+title.Size = UDim2.new(0, 200, 0, 14); title.Position = UDim2.new(0, 34, 0, 3)
+title.BackgroundTransparency = 1; title.Text = "XJ HUB 1.6"
 title.TextColor3 = Color3.new(1,1,1); title.Font = Enum.Font.GothamBold
 title.TextSize = 12; title.TextXAlignment = Enum.TextXAlignment.Left
 
 local sub = Instance.new("TextLabel", topbar)
-sub.Size = UDim2.new(0, 250, 0, 12); sub.Position = UDim2.new(0, 40, 0, 21)
+sub.Size = UDim2.new(0, 220, 0, 10); sub.Position = UDim2.new(0, 34, 0, 19)
 sub.BackgroundTransparency = 1
-sub.Text = (Device.isMobile and "📱 " or "🖥 ")..exeName.." · 拦截 "..BLOCKED
+sub.Text = Exec.name.." · "..(Exec.hasHook and "Hook" or "无Hook")
 sub.TextColor3 = Color3.fromRGB(120,230,150)
-sub.Font = Enum.Font.Gotham; sub.TextSize = 9
+sub.Font = Enum.Font.Gotham; sub.TextSize = 8
 sub.TextXAlignment = Enum.TextXAlignment.Left
 
--- 移动端加大按钮
-local BTN_SIZE = Device.isMobile and 32 or 26
+local BTN = Exec.isMobile and 30 or 26
 local minBtn = Instance.new("TextButton", topbar)
-minBtn.Size = UDim2.new(0, BTN_SIZE, 0, BTN_SIZE)
-minBtn.Position = UDim2.new(1, -(BTN_SIZE*2+8), 0.5, -BTN_SIZE/2)
+minBtn.Size = UDim2.new(0, BTN, 0, BTN)
+minBtn.Position = UDim2.new(1, -(BTN*2+6), 0.5, -BTN/2)
 minBtn.BackgroundColor3 = Color3.fromRGB(251,191,36); minBtn.Text = "－"
 minBtn.TextColor3 = Color3.new(1,1,1); minBtn.Font = Enum.Font.GothamBold
 minBtn.TextSize = 15; minBtn.BorderSizePixel = 0
 Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
 
 local closeBtn = Instance.new("TextButton", topbar)
-closeBtn.Size = UDim2.new(0, BTN_SIZE, 0, BTN_SIZE)
-closeBtn.Position = UDim2.new(1, -(BTN_SIZE+4), 0.5, -BTN_SIZE/2)
+closeBtn.Size = UDim2.new(0, BTN, 0, BTN)
+closeBtn.Position = UDim2.new(1, -(BTN+3), 0.5, -BTN/2)
 closeBtn.BackgroundColor3 = Color3.fromRGB(239,68,68); closeBtn.Text = "×"
 closeBtn.TextColor3 = Color3.new(1,1,1); closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextSize = 17; closeBtn.BorderSizePixel = 0
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
 
--- 拖拽 (触控 + 鼠标)
+-- 拖拽
 local drag, dStart, dPos = false, nil, nil
 topbar.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -1211,9 +955,10 @@ UIS.InputChanged:Connect(function(i)
     if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
         local d = i.Position - dStart
         local vp2 = WS.CurrentCamera and WS.CurrentCamera.ViewportSize or Vector2.new(1280,720)
-        local nx = math.clamp(dPos.X.Offset + d.X, 100 - main.AbsoluteSize.X, vp2.X - 100)
-        local ny = math.clamp(dPos.Y.Offset + d.Y, 0, vp2.Y - 40)
-        main.Position = UDim2.new(0, nx, 0, ny)
+        main.Position = UDim2.new(0,
+            math.clamp(dPos.X.Offset + d.X, 100 - main.AbsoluteSize.X, vp2.X - 100),
+            0,
+            math.clamp(dPos.Y.Offset + d.Y, 0, vp2.Y - 40))
     end
 end)
 UIS.InputEnded:Connect(function(i)
@@ -1222,11 +967,11 @@ UIS.InputEnded:Connect(function(i)
     end
 end)
 
--- 灵动岛 (移动端加大)
-local islandW, islandH = Device.isMobile and 150 or 160, Device.isMobile and 36 or 38
+-- 灵动岛
+local iW, iH = Exec.isMobile and 140 or 160, Exec.isMobile and 34 or 38
 local island = Instance.new("TextButton", screen)
-island.Size = UDim2.new(0, islandW, 0, islandH)
-island.Position = UDim2.new(0.5, -islandW*uiScale/2, 0, 12)
+island.Size = UDim2.new(0, iW, 0, iH)
+island.Position = UDim2.new(0.5, -iW*uiScale/2, 0, 10)
 island.BackgroundColor3 = Color3.fromRGB(10,10,16)
 island.BackgroundTransparency = 0.05
 island.Text = ""; island.BorderSizePixel = 0
@@ -1237,37 +982,29 @@ local isStroke = Instance.new("UIStroke", island)
 isStroke.Color = Color3.fromRGB(168,85,247); isStroke.Thickness = 1.4
 
 local isAvatar = Instance.new("ImageLabel", island)
-isAvatar.Size = UDim2.new(0, 26, 0, 26); isAvatar.Position = UDim2.new(0, 5, 0.5, -13)
+isAvatar.Size = UDim2.new(0, 24, 0, 24); isAvatar.Position = UDim2.new(0, 5, 0.5, -12)
 isAvatar.BackgroundColor3 = Color3.fromRGB(40,40,55); isAvatar.BorderSizePixel = 0
 isAvatar.Image = userInfo.thumb
 Instance.new("UICorner", isAvatar).CornerRadius = UDim.new(1, 0)
 
 local isTitle = Instance.new("TextLabel", island)
-isTitle.Size = UDim2.new(1, -88, 0, 12); isTitle.Position = UDim2.new(0, 36, 0, 4)
-isTitle.BackgroundTransparency = 1; isTitle.Text = "XJ Hub v1.5"
+isTitle.Size = UDim2.new(1, -80, 0, 12); isTitle.Position = UDim2.new(0, 34, 0, 3)
+isTitle.BackgroundTransparency = 1; isTitle.Text = "XJ Hub v1.6"
 isTitle.TextColor3 = Color3.new(1,1,1); isTitle.Font = Enum.Font.GothamBold
-isTitle.TextSize = 11; isTitle.TextXAlignment = Enum.TextXAlignment.Left
+isTitle.TextSize = 10; isTitle.TextXAlignment = Enum.TextXAlignment.Left
 
 local isInfo = Instance.new("TextLabel", island)
-isInfo.Size = UDim2.new(1, -88, 0, 10); isInfo.Position = UDim2.new(0, 36, 0, 20)
+isInfo.Size = UDim2.new(1, -80, 0, 10); isInfo.Position = UDim2.new(0, 34, 0, 18)
 isInfo.BackgroundTransparency = 1; isInfo.Text = "FPS 0 · Ping 0"
 isInfo.TextColor3 = Color3.fromRGB(160,160,180); isInfo.Font = Enum.Font.Gotham
 isInfo.TextSize = 9; isInfo.TextXAlignment = Enum.TextXAlignment.Left
-
-local isDot = Instance.new("Frame", island)
-isDot.Size = UDim2.new(0, 8, 0, 8); isDot.Position = UDim2.new(1, -16, 0.5, -4)
-isDot.BackgroundColor3 = Color3.fromRGB(52,219,137); isDot.BorderSizePixel = 0
-Instance.new("UICorner", isDot).CornerRadius = UDim.new(1, 0)
-Tween:Create(isDot, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-    BackgroundTransparency = 0.6,
-}):Play()
 
 task.spawn(function()
     while screen.Parent do
         pcall(function()
             isInfo.Text = string.format("FPS %d · Ping %d", stats.fps, stats.ping)
         end)
-        task.wait(0.6)
+        task.wait(0.8)
     end
 end)
 
@@ -1289,30 +1026,16 @@ local minimized = false
 local function minimize()
     if minimized then return end
     minimized = true
-    Tween:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
-        Size = UDim2.new(0, 100, 0, 60),
-    }):Play()
-    task.wait(0.28)
     main.Visible = false
     island.Visible = true
-    island.Size = UDim2.new(0, 0, 0, islandH)
-    Tween:Create(island, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, islandW, 0, islandH),
-    }):Play()
+    island.Size = UDim2.new(0, iW, 0, iH)
 end
 local function restore()
     if not minimized then return end
     minimized = false
-    Tween:Create(island, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-        Size = UDim2.new(0, 0, 0, islandH),
-    }):Play()
-    task.wait(0.22)
     island.Visible = false
     main.Visible = true
-    main.Size = UDim2.new(0, 100, 0, 60)
-    Tween:Create(main, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, W, 0, H),
-    }):Play()
+    main.Size = UDim2.new(0, W, 0, H)
 end
 UIS.InputEnded:Connect(function(i)
     if iDrag and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then
@@ -1328,11 +1051,11 @@ closeBtn.MouseButton1Click:Connect(function()
     screen:Destroy()
 end)
 
--- 侧栏 (移动端加宽)
-local sidebarW = Device.isMobile and 72 or 90
+-- 侧栏
+local sidebarW = Exec.isMobile and 68 or 90
 local sidebar = Instance.new("Frame", main)
-sidebar.Size = UDim2.new(0, sidebarW, 1, -52)
-sidebar.Position = UDim2.new(0, 6, 0, 46)
+sidebar.Size = UDim2.new(0, sidebarW, 1, -(TOP_H+10))
+sidebar.Position = UDim2.new(0, 5, 0, TOP_H+6)
 sidebar.BackgroundColor3 = Color3.fromRGB(20,20,28)
 sidebar.BackgroundTransparency = 0.2; sidebar.BorderSizePixel = 0
 Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 8)
@@ -1345,25 +1068,24 @@ innerNav.CanvasSize = UDim2.new(0,0,0,0)
 innerNav.AutomaticCanvasSize = Enum.AutomaticSize.Y
 local nl = Instance.new("UIListLayout", innerNav); nl.Padding = UDim.new(0, 2)
 local np = Instance.new("UIPadding", innerNav)
-np.PaddingTop = UDim.new(0, 4); np.PaddingBottom = UDim.new(0, 4)
-np.PaddingLeft = UDim.new(0, 4); np.PaddingRight = UDim.new(0, 4)
+np.PaddingTop = UDim.new(0, 3); np.PaddingBottom = UDim.new(0, 3)
+np.PaddingLeft = UDim.new(0, 3); np.PaddingRight = UDim.new(0, 3)
 
 local content = Instance.new("Frame", main)
-content.Size = UDim2.new(1, -(sidebarW+14), 1, -52)
-content.Position = UDim2.new(0, sidebarW+8, 0, 46)
+content.Size = UDim2.new(1, -(sidebarW+12), 1, -(TOP_H+10))
+content.Position = UDim2.new(0, sidebarW+7, 0, TOP_H+6)
 content.BackgroundColor3 = Color3.fromRGB(18,18,26)
 content.BackgroundTransparency = 0.2; content.BorderSizePixel = 0
 Instance.new("UICorner", content).CornerRadius = UDim.new(0, 8)
 
 local pages, tabButtons = {}, {}
 local currentTab
-
 local function createPage(name)
     local page = Instance.new("ScrollingFrame", content)
-    page.Size = UDim2.new(1, -10, 1, -10)
-    page.Position = UDim2.new(0, 5, 0, 5)
+    page.Size = UDim2.new(1, -8, 1, -8)
+    page.Position = UDim2.new(0, 4, 0, 4)
     page.BackgroundTransparency = 1; page.BorderSizePixel = 0
-    page.ScrollBarThickness = 3
+    page.ScrollBarThickness = 2
     page.ScrollBarImageColor3 = Color3.fromRGB(168,85,247)
     page.AutomaticCanvasSize = Enum.AutomaticSize.Y
     page.CanvasSize = UDim2.new(0,0,0,0)
@@ -1373,7 +1095,7 @@ local function createPage(name)
 end
 
 local tabCount = 0
-local TAB_H = Device.isMobile and 32 or 28
+local TAB_H = Exec.isMobile and 30 or 28
 local function createTab(name, icon)
     tabCount = tabCount + 1
     local btn = Instance.new("TextButton", innerNav)
@@ -1382,20 +1104,22 @@ local function createTab(name, icon)
     btn.BackgroundTransparency = 1
     btn.Text = ""; btn.BorderSizePixel = 0
     btn.LayoutOrder = tabCount; btn.AutoButtonColor = false
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+
     local ico = Instance.new("TextLabel", btn)
-    ico.Size = UDim2.new(0, 16, 1, 0)
-    ico.Position = UDim2.new(0, Device.isMobile and 2 or 6, 0, 0)
+    ico.Size = UDim2.new(0, 14, 1, 0); ico.Position = UDim2.new(0, 2, 0, 0)
     ico.BackgroundTransparency = 1; ico.Text = icon or ""
     ico.TextColor3 = Color3.fromRGB(190,190,210)
-    ico.Font = Enum.Font.GothamBold; ico.TextSize = 11
+    ico.Font = Enum.Font.GothamBold; ico.TextSize = 10
+
     local lbl = Instance.new("TextLabel", btn)
-    lbl.Size = UDim2.new(1, Device.isMobile and -20 or -24, 1, 0)
-    lbl.Position = UDim2.new(0, Device.isMobile and 20 or 24, 0, 0)
-    lbl.BackgroundTransparency = 1; lbl.Text = Device.isMobile and name:sub(1,2) or name
+    lbl.Size = UDim2.new(1, -18, 1, 0); lbl.Position = UDim2.new(0, 18, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = Exec.isMobile and name:sub(1,2) or name
     lbl.TextColor3 = Color3.fromRGB(190,190,210)
-    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = Device.isMobile and 10 or 11
+    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = Exec.isMobile and 9 or 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+
     tabButtons[name] = { btn=btn, lbl=lbl, ico=ico }
     btn.MouseButton1Click:Connect(function()
         if currentTab == name then return end
@@ -1405,7 +1129,7 @@ local function createTab(name, icon)
         for n, t in pairs(tabButtons) do
             local c = n == name and Color3.new(1,1,1) or Color3.fromRGB(190,190,210)
             t.lbl.TextColor3 = c; t.ico.TextColor3 = c
-            t.btn.BackgroundTransparency = n == name and 0.75 or 1
+            t.btn.BackgroundTransparency = n == name and 0.7 or 1
         end
     end)
 end
@@ -1426,33 +1150,33 @@ local function riskTextColor(r)
         or Color3.fromRGB(235,235,245)
 end
 
--- 移动端加大 Toggle 高度
-local TOGGLE_H = Device.isMobile and 40 or 32
+local TG_H = Exec.isMobile and 36 or 32
 local function createToggle(parent, name, def, cb, risk)
     risk = risk or "safe"
     local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, 0, 0, TOGGLE_H)
+    btn.Size = UDim2.new(1, 0, 0, TG_H)
     btn.BackgroundColor3 = riskBg(risk)
     btn.BackgroundTransparency = 0.1
     btn.Text = ""; btn.BorderSizePixel = 0; btn.AutoButtonColor = false
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -56, 1, 0); lbl.Position = UDim2.new(0, 10, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = riskPrefix(risk)..name
     lbl.TextColor3 = riskTextColor(risk)
-    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = Device.isMobile and 12 or 11
+    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = Exec.isMobile and 11 or 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
 
+    local indW = Exec.isMobile and 40 or 36
+    local indH = Exec.isMobile and 20 or 18
     local ind = Instance.new("Frame", btn)
-    local indW = Device.isMobile and 42 or 36
-    local indH = Device.isMobile and 22 or 18
     ind.Size = UDim2.new(0, indW, 0, indH)
     ind.Position = UDim2.new(1, -(indW+8), 0.5, -indH/2)
     ind.BackgroundColor3 = Color3.fromRGB(50,50,65); ind.BorderSizePixel = 0
     Instance.new("UICorner", ind).CornerRadius = UDim.new(1, 0)
 
-    local knobW = Device.isMobile and 18 or 14
+    local knobW = Exec.isMobile and 16 or 14
     local knob = Instance.new("Frame", ind)
     knob.Size = UDim2.new(0, knobW, 0, knobW)
     knob.Position = UDim2.new(0, 2, 0.5, -knobW/2)
@@ -1472,24 +1196,26 @@ local function createToggle(parent, name, def, cb, risk)
     btn.MouseButton1Click:Connect(function()
         state = not state; refresh()
         if cb then pcall(cb, state) end
-        if state then notify(name, "功能已开启", "success", 2)
-        else notify(name, "功能已关闭", "warn", 2) end
+        if state then notify(name, "已开启", "success", 1.5)
+        else notify(name, "已关闭", "warn", 1.5) end
     end)
 end
 
 local function createSlider(parent, name, min, max, def, cb, risk)
     risk = risk or "safe"
     local frame = Instance.new("Frame", parent)
-    frame.Size = UDim2.new(1, 0, 0, Device.isMobile and 54 or 46)
+    frame.Size = UDim2.new(1, 0, 0, Exec.isMobile and 50 or 46)
     frame.BackgroundColor3 = riskBg(risk)
     frame.BackgroundTransparency = 0.1; frame.BorderSizePixel = 0
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
     local lbl = Instance.new("TextLabel", frame)
     lbl.Size = UDim2.new(1, -56, 0, 14); lbl.Position = UDim2.new(0, 10, 0, 4)
     lbl.BackgroundTransparency = 1; lbl.Text = riskPrefix(risk)..name
     lbl.TextColor3 = riskTextColor(risk)
-    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = Device.isMobile and 12 or 11
+    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+
     local vLbl = Instance.new("TextLabel", frame)
     vLbl.Size = UDim2.new(0, 46, 0, 14); vLbl.Position = UDim2.new(1, -56, 0, 4)
     vLbl.BackgroundTransparency = 1; vLbl.Text = tostring(def)
@@ -1497,24 +1223,26 @@ local function createSlider(parent, name, min, max, def, cb, risk)
     vLbl.Font = Enum.Font.GothamBold; vLbl.TextSize = 12
     vLbl.TextXAlignment = Enum.TextXAlignment.Right
 
-    local trackH = Device.isMobile and 10 or 6
+    local trackH = Exec.isMobile and 10 or 6
     local track = Instance.new("TextButton", frame)
     track.Size = UDim2.new(1, -20, 0, trackH)
-    track.Position = UDim2.new(0, 10, 0, Device.isMobile and 34 or 28)
+    track.Position = UDim2.new(0, 10, 0, Exec.isMobile and 32 or 28)
     track.BackgroundColor3 = Color3.fromRGB(50,50,65)
     track.Text = ""; track.BorderSizePixel = 0; track.AutoButtonColor = false
     Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
     local fill = Instance.new("Frame", track)
     fill.Size = UDim2.new((def-min)/(max-min), 0, 1, 0)
     fill.BackgroundColor3 = Color3.fromRGB(168,85,247); fill.BorderSizePixel = 0
     Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
-    local dotW = Device.isMobile and 18 or 12
+
+    local dotW = Exec.isMobile and 18 or 12
     local dot = Instance.new("Frame", track)
     dot.Size = UDim2.new(0, dotW, 0, dotW)
     dot.Position = UDim2.new((def-min)/(max-min), -dotW/2, 0.5, -dotW/2)
     dot.BackgroundColor3 = Color3.new(1,1,1); dot.BorderSizePixel = 0
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
-    Instance.new("UIStroke", dot).Color = Color3.fromRGB(168,85,247)
+
     local dg = false
     local function update(x)
         local pos = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
@@ -1540,26 +1268,29 @@ end
 local function createDropdown(parent, name, options, defIdx, cb, risk)
     risk = risk or "safe"
     local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, 0, 0, Device.isMobile and 40 or 32)
+    btn.Size = UDim2.new(1, 0, 0, Exec.isMobile and 36 or 32)
     btn.BackgroundColor3 = riskBg(risk)
     btn.BackgroundTransparency = 0.1
     btn.Text = ""; btn.BorderSizePixel = 0; btn.AutoButtonColor = false
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
     local lbl = Instance.new("TextLabel", btn)
     lbl.Size = UDim2.new(1, -100, 1, 0); lbl.Position = UDim2.new(0, 10, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = riskPrefix(risk)..name
     lbl.TextColor3 = riskTextColor(risk)
-    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = Device.isMobile and 12 or 11
+    lbl.Font = Enum.Font.GothamMedium; lbl.TextSize = 11
     lbl.TextXAlignment = Enum.TextXAlignment.Left
+
     local vBox = Instance.new("TextButton", btn)
-    vBox.Size = UDim2.new(0, 84, 0, Device.isMobile and 26 or 22)
-    vBox.Position = UDim2.new(1, -92, 0.5, Device.isMobile and -13 or -11)
+    vBox.Size = UDim2.new(0, 80, 0, 22)
+    vBox.Position = UDim2.new(1, -88, 0.5, -11)
     vBox.BackgroundColor3 = Color3.fromRGB(45,45,60)
     vBox.Text = options[defIdx or 1]
     vBox.TextColor3 = Color3.fromRGB(235,235,245)
     vBox.Font = Enum.Font.Gotham; vBox.TextSize = 10
     vBox.BorderSizePixel = 0; vBox.AutoButtonColor = false
     Instance.new("UICorner", vBox).CornerRadius = UDim.new(0, 5)
+
     local idx = defIdx or 1
     vBox.MouseButton1Click:Connect(function()
         idx = idx % #options + 1
@@ -1568,7 +1299,7 @@ local function createDropdown(parent, name, options, defIdx, cb, risk)
     end)
 end
 
--- 页面
+-- 创建所有页面
 createPage("主页"); createPage("玩家"); createPage("战斗"); createPage("自瞄")
 createPage("透视"); createPage("刷钱"); createPage("飞车"); createPage("杂项"); createPage("自检")
 
@@ -1579,67 +1310,75 @@ createTab("飞车", "🚗"); createTab("杂项", "⚡"); createTab("自检", "�
 pages["主页"].Visible = true; currentTab = "主页"
 tabButtons["主页"].lbl.TextColor3 = Color3.new(1,1,1)
 tabButtons["主页"].ico.TextColor3 = Color3.new(1,1,1)
-tabButtons["主页"].btn.BackgroundTransparency = 0.75
+tabButtons["主页"].btn.BackgroundTransparency = 0.7
 
--- 主页卡片
+-- 主页
 local userCard = Instance.new("Frame", pages["主页"])
-userCard.Size = UDim2.new(1, 0, 0, 70)
+userCard.Size = UDim2.new(1, 0, 0, 66)
 userCard.BackgroundColor3 = Color3.fromRGB(28,28,40)
 userCard.BackgroundTransparency = 0.1; userCard.BorderSizePixel = 0
 Instance.new("UICorner", userCard).CornerRadius = UDim.new(0, 7)
+
 local avatar = Instance.new("ImageLabel", userCard)
-avatar.Size = UDim2.new(0, 55, 0, 55); avatar.Position = UDim2.new(0, 8, 0.5, -27)
+avatar.Size = UDim2.new(0, 50, 0, 50); avatar.Position = UDim2.new(0, 8, 0.5, -25)
 avatar.BackgroundColor3 = Color3.fromRGB(40,40,55); avatar.BorderSizePixel = 0
 avatar.Image = userInfo.thumb
-Instance.new("UICorner", avatar).CornerRadius = UDim.new(0, 27)
+Instance.new("UICorner", avatar).CornerRadius = UDim.new(0, 25)
 Instance.new("UIStroke", avatar).Color = Color3.fromRGB(168,85,247)
+
 local nameLbl = Instance.new("TextLabel", userCard)
-nameLbl.Size = UDim2.new(1, -74, 0, 16); nameLbl.Position = UDim2.new(0, 70, 0, 8)
+nameLbl.Size = UDim2.new(1, -68, 0, 14); nameLbl.Position = UDim2.new(0, 64, 0, 6)
 nameLbl.BackgroundTransparency = 1; nameLbl.Text = userInfo.name
 nameLbl.TextColor3 = Color3.new(1,1,1); nameLbl.Font = Enum.Font.GothamBold
-nameLbl.TextSize = 13; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+nameLbl.TextSize = 12; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+
 local infoLbl = Instance.new("TextLabel", userCard)
-infoLbl.Size = UDim2.new(1, -74, 0, 12); infoLbl.Position = UDim2.new(0, 70, 0, 26)
+infoLbl.Size = UDim2.new(1, -68, 0, 12); infoLbl.Position = UDim2.new(0, 64, 0, 22)
 infoLbl.BackgroundTransparency = 1
 infoLbl.Text = "@"..userInfo.displayName.." · "..userInfo.membership
 infoLbl.TextColor3 = Color3.fromRGB(180,180,200); infoLbl.Font = Enum.Font.Gotham
 infoLbl.TextSize = 10; infoLbl.TextXAlignment = Enum.TextXAlignment.Left
-local idLbl = Instance.new("TextLabel", userCard)
-idLbl.Size = UDim2.new(1, -74, 0, 12); idLbl.Position = UDim2.new(0, 70, 0, 40)
-idLbl.BackgroundTransparency = 1
-idLbl.Text = "ID: "..userInfo.userId.." · "..Device.screenW.."x"..Device.screenH.." · "..exeName
-idLbl.TextColor3 = Color3.fromRGB(190,130,255); idLbl.Font = Enum.Font.Gotham
-idLbl.TextSize = 10; idLbl.TextXAlignment = Enum.TextXAlignment.Left
 
+local devLbl = Instance.new("TextLabel", userCard)
+devLbl.Size = UDim2.new(1, -68, 0, 12); devLbl.Position = UDim2.new(0, 64, 0, 36)
+devLbl.BackgroundTransparency = 1
+devLbl.Text = Exec.name.." · "..math.floor(vp.X).."x"..math.floor(vp.Y)
+devLbl.TextColor3 = Color3.fromRGB(190,130,255); devLbl.Font = Enum.Font.Gotham
+devLbl.TextSize = 10; devLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+-- 数据卡
 local statsCard = Instance.new("Frame", pages["主页"])
-statsCard.Size = UDim2.new(1, 0, 0, 60)
+statsCard.Size = UDim2.new(1, 0, 0, 55)
 statsCard.BackgroundColor3 = Color3.fromRGB(28,28,40)
 statsCard.BackgroundTransparency = 0.1; statsCard.BorderSizePixel = 0
 Instance.new("UICorner", statsCard).CornerRadius = UDim.new(0, 7)
+
 local statsTitle = Instance.new("TextLabel", statsCard)
-statsTitle.Size = UDim2.new(1, -20, 0, 16); statsTitle.Position = UDim2.new(0, 10, 0, 5)
+statsTitle.Size = UDim2.new(1, -20, 0, 14); statsTitle.Position = UDim2.new(0, 10, 0, 4)
 statsTitle.BackgroundTransparency = 1; statsTitle.Text = "📊 实时数据"
 statsTitle.TextColor3 = Color3.fromRGB(150,200,255); statsTitle.Font = Enum.Font.GothamBold
-statsTitle.TextSize = 11; statsTitle.TextXAlignment = Enum.TextXAlignment.Left
+statsTitle.TextSize = 10; statsTitle.TextXAlignment = Enum.TextXAlignment.Left
+
 local statsRow = Instance.new("Frame", statsCard)
-statsRow.Size = UDim2.new(1, -20, 0, 32); statsRow.Position = UDim2.new(0, 10, 0, 22)
+statsRow.Size = UDim2.new(1, -20, 0, 30); statsRow.Position = UDim2.new(0, 10, 0, 20)
 statsRow.BackgroundTransparency = 1
 local srl = Instance.new("UIListLayout", statsRow)
 srl.FillDirection = Enum.FillDirection.Horizontal; srl.Padding = UDim.new(0, 5)
+
 local function makeCell(parent, label, color)
     local cell = Instance.new("Frame", parent)
     cell.Size = UDim2.new(1/3, -4, 1, 0)
     cell.BackgroundColor3 = Color3.fromRGB(22,22,32); cell.BorderSizePixel = 0
     Instance.new("UICorner", cell).CornerRadius = UDim.new(0, 5)
     local t = Instance.new("TextLabel", cell)
-    t.Size = UDim2.new(1, 0, 0, 10); t.Position = UDim2.new(0, 0, 0, 2)
+    t.Size = UDim2.new(1, 0, 0, 10); t.Position = UDim2.new(0, 0, 0, 1)
     t.BackgroundTransparency = 1; t.Text = label
     t.TextColor3 = Color3.fromRGB(150,150,180)
     t.Font = Enum.Font.Gotham; t.TextSize = 8
     local v = Instance.new("TextLabel", cell)
-    v.Size = UDim2.new(1, 0, 0, 16); v.Position = UDim2.new(0, 0, 0, 12)
+    v.Size = UDim2.new(1, 0, 0, 16); v.Position = UDim2.new(0, 0, 0, 11)
     v.BackgroundTransparency = 1; v.Text = "0"
-    v.TextColor3 = color; v.Font = Enum.Font.GothamBold; v.TextSize = 12
+    v.TextColor3 = color; v.Font = Enum.Font.GothamBold; v.TextSize = 11
     return v
 end
 local fpsValue = makeCell(statsRow, "FPS", Color3.fromRGB(80,220,100))
@@ -1656,11 +1395,11 @@ task.spawn(function()
                 or Color3.fromRGB(80,220,100)
             espValueCell.Text = string.format("%.1fms", stats.espAvg*1000)
         end)
-        task.wait(0.6)
+        task.wait(0.7)
     end
 end)
 
--- 功能页
+-- 功能开关
 createToggle(pages["玩家"], "无限体力", false, function(v) S.stamina=v end, "mid")
 createToggle(pages["玩家"], "无限饥饿", false, function(v) S.food=v end, "mid")
 createToggle(pages["玩家"], "无限子弹", false, function(v) S.infiniteAmmo=v end, "mid")
@@ -1679,16 +1418,14 @@ createSlider(pages["战斗"], "光环范围", 50, 800, 200, function(v) S.auraRa
 createSlider(pages["战斗"], "光环伤害", 1, 100, 5, function(v) S.auraDamage=v end, "mid")
 createToggle(pages["战斗"], "拟人化延迟", true, function(v) S.auraHumanize=v end, "safe")
 createToggle(pages["战斗"], "隐蔽模式", true, function(v) S.auraStealth=v end, "safe")
-createToggle(pages["战斗"], "自动铐 (节流)", false, function(v) S.autoCuff=v end, "mid")
+createToggle(pages["战斗"], "自动铐", false, function(v) S.autoCuff=v end, "mid")
 
-createToggle(pages["自瞄"], "开启自瞄 (右键)", false, function(v) S.aimbot.enabled=v end, "safe")
-createToggle(pages["自瞄"], "显示 FOV 圈", true, function(v) S.aimbot.showFov=v end, "safe")
-createToggle(pages["自瞄"], "显示追踪线", false, function(v) S.aimbot.showTracer=v end, "safe")
+createToggle(pages["自瞄"], "开启自瞄", false, function(v) S.aimbot.enabled=v end, "safe")
+createToggle(pages["自瞄"], "显示准星", true, function(v) S.aimbot.showFov=v end, "safe")
 createToggle(pages["自瞄"], "好友检测", false, function(v) S.aimbot.friendCheck=v end, "safe")
 createToggle(pages["自瞄"], "墙壁检测", false, function(v) S.aimbot.wallCheck=v end, "safe")
 createToggle(pages["自瞄"], "队伍检测", false, function(v) S.aimbot.teamCheck=v end, "safe")
 createToggle(pages["自瞄"], "船员检测", false, function(v) S.aimbot.crewCheck=v end, "safe")
-createDropdown(pages["自瞄"], "FOV 颜色", {"红色","绿色","蓝色","紫色","白色","彩虹"}, 1, function(v) S.aimbot.color=v end, "safe")
 createDropdown(pages["自瞄"], "瞄准部位", {"头部","胸部"}, 1, function(v) S.aimbot.targetPart=v end, "safe")
 createSlider(pages["自瞄"], "FOV 大小", 20, 400, 120, function(v) S.aimbot.fov=v end, "safe")
 createSlider(pages["自瞄"], "平滑度", 1, 10, 3, function(v) S.aimbot.smoothness=v/10 end, "safe")
@@ -1710,7 +1447,6 @@ createToggle(pages["刷钱"], "自动出租车", false, function(v)
     if v then S.autoTaxi=true; startTaxi() else stopTaxi() end
 end, "mid")
 createToggle(pages["刷钱"], "出租车安全模式", false, function(v) S.taxiSafe=v end, "safe")
-createDropdown(pages["刷钱"], "出租车延迟", {"随机时间","距离测算"}, 1, function(v) S.taxiDelayMode=v end, "safe")
 createToggle(pages["刷钱"], "自动高尔夫", false, function(v)
     if v then S.autoGolf=true; startGolf() else stopGolf() end
 end, "mid")
@@ -1728,17 +1464,19 @@ createToggle(pages["杂项"], "防布娃娃", false, function(v) S.noRagdoll=v e
 
 -- 自检页
 local selfCard = Instance.new("Frame", pages["自检"])
-selfCard.Size = UDim2.new(1, 0, 0, 280)
+selfCard.Size = UDim2.new(1, 0, 0, 240)
 selfCard.BackgroundColor3 = Color3.fromRGB(20,20,30)
 selfCard.BackgroundTransparency = 0.1; selfCard.BorderSizePixel = 0
 Instance.new("UICorner", selfCard).CornerRadius = UDim.new(0, 7)
+
 local selfTitle = Instance.new("TextLabel", selfCard)
 selfTitle.Size = UDim2.new(1, -20, 0, 16); selfTitle.Position = UDim2.new(0, 10, 0, 6)
-selfTitle.BackgroundTransparency = 1; selfTitle.Text = "🧪 自检 v1.5 · "..exeName
+selfTitle.BackgroundTransparency = 1; selfTitle.Text = "🧪 自检 · "..Exec.name
 selfTitle.TextColor3 = Color3.fromRGB(150,200,255); selfTitle.Font = Enum.Font.GothamBold
 selfTitle.TextSize = 11; selfTitle.TextXAlignment = Enum.TextXAlignment.Left
+
 local selfOut = Instance.new("TextLabel", selfCard)
-selfOut.Size = UDim2.new(1, -20, 1, -40); selfOut.Position = UDim2.new(0, 10, 0, 24)
+selfOut.Size = UDim2.new(1, -20, 1, -44); selfOut.Position = UDim2.new(0, 10, 0, 24)
 selfOut.BackgroundTransparency = 1
 selfOut.Text = "点击下方按钮开始自检"
 selfOut.TextColor3 = Color3.fromRGB(220,220,235)
@@ -1746,11 +1484,12 @@ selfOut.Font = Enum.Font.Code; selfOut.TextSize = 10
 selfOut.TextXAlignment = Enum.TextXAlignment.Left
 selfOut.TextYAlignment = Enum.TextYAlignment.Top
 selfOut.TextWrapped = true
+
 local runTestBtn = Instance.new("TextButton", selfCard)
-runTestBtn.Size = UDim2.new(1, -20, 0, Device.isMobile and 32 or 26)
-runTestBtn.Position = UDim2.new(0, 10, 1, -40)
+runTestBtn.Size = UDim2.new(1, -20, 0, Exec.isMobile and 32 or 26)
+runTestBtn.Position = UDim2.new(0, 10, 1, -38)
 runTestBtn.BackgroundColor3 = Color3.fromRGB(168,85,247)
-runTestBtn.Text = "▶ 运行全部自检"
+runTestBtn.Text = "▶ 运行自检"
 runTestBtn.TextColor3 = Color3.new(1,1,1)
 runTestBtn.Font = Enum.Font.GothamBold; runTestBtn.TextSize = 11
 runTestBtn.BorderSizePixel = 0
@@ -1763,44 +1502,35 @@ local function runTests()
         if okk and res then lines[#lines+1] = "✅ "..name; pass = pass + 1
         else lines[#lines+1] = "❌ "..name; fail = fail + 1 end
     end
-    T("属性欺骗", function() return SPOOF.installed end)
-    T("远程拦截", function() return CAP.hookmm end)
-    T("远程节流", function() return type(throttledFire)=="function" end)
-    T("连接清理", function() return CAP.getconn end)
-    T("Drawing (禁用时跳过)", function() return true end)
-    T("getgc", function() return CAP.getgc end)
-    T("gethui", function() return CAP.gethui end)
-    T("fireproximityprompt", function() return CAP.firepp end)
-    T("Remote 已获取", function() return playerEvent ~= nil end)
-    T("PlayerFunc 已获取", function() return playerFunc ~= nil end)
-    T("本地角色存在", function() local c,h = getChar(); return c~=nil and h~=nil end)
-    T("通知系统", function() notify("自检","通知正常","success",1.5); return true end)
+    T("执行器: "..Exec.name, function() return Exec.name ~= "未知" end)
+    T("Hook 能力", function() return Exec.hasHook end)
+    T("Drawing 能力", function() return Exec.hasDrawing end)
+    T("getgc", function() return Exec.hasGetGC end)
+    T("gethui", function() return Exec.hasHui end)
+    T("fireproximityprompt", function() return Exec.hasFirePP end)
+    T("Remote 已获取", function() return remote ~= nil end)
+    T("PlayerEvent", function() return playerEvent ~= nil end)
+    T("PlayerFunc", function() return playerFunc ~= nil end)
+    T("本地角色", function() local c,h = getChar(); return c~=nil and h~=nil end)
+    T("通知系统", function() notify("自检","测试","success",1); return true end)
     T("物理飞行", function()
         S.flyEnabled=true; startFly(); task.wait(0.1)
-        local okv = Fly.align~=nil and Fly.bv~=nil
+        local okv = Fly.align~=nil
         S.flyEnabled=false; stopFly()
         return okv
     end)
-    T("Noclip 缓存", function()
-        S.noclip=true; startNoclip(); task.wait(0.1)
-        local okv = Noclip.conn~=nil and #Noclip.parts>0
-        S.noclip=false; stopNoclip()
-        return okv
-    end)
-    T("玩家数量可读", function() return #Players:GetPlayers()>=1 end)
+    T("玩家数量", function() return #Players:GetPlayers() >= 1 end)
 
     lines[#lines+1] = ""
-    lines[#lines+1] = string.format("结果: %d / %d 通过", pass, pass+fail)
-    lines[#lines+1] = "设备: "..(Device.isMobile and "手机/平板" or "桌面")
-    lines[#lines+1] = "执行器: "..exeName
-    lines[#lines+1] = "拦截: "..BLOCKED.." | 欺骗: "..SPOOF.count
+    lines[#lines+1] = string.format("结果: %d / %d", pass, pass+fail)
+    lines[#lines+1] = "设备: "..(Exec.isIOS and "iOS" or Exec.isAndroid and "Android" or "桌面")
+    lines[#lines+1] = "Hook: "..tostring(Exec.hasHook).." | Drawing: "..tostring(Exec.hasDrawing)
     selfOut.Text = table.concat(lines, "\n")
-    notify("自检完成", string.format("%d 通过 / %d 失败", pass, fail), fail==0 and "success" or "warn", 3)
-    return pass, fail
+    notify("自检完成", string.format("%d 通过 / %d 失败", pass, fail), fail==0 and "success" or "warn", 2)
 end
 runTestBtn.MouseButton1Click:Connect(runTests)
 
--- 右键自瞄 (桌面) / 触控长按 (移动)
+-- 右键自瞄 (桌面) + 触控
 UIS.InputBegan:Connect(function(i, g)
     if g then return end
     if i.UserInputType == Enum.UserInputType.MouseButton2 then S.aimbot.keyHeld = true end
@@ -1809,97 +1539,109 @@ UIS.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton2 then S.aimbot.keyHeld = false end
 end)
 
--- 移动端: 屏幕右侧触摸触发自瞄
-if Device.isMobile then
-    local aimTouch = Instance.new("TextButton", screen)
-    aimTouch.Size = UDim2.new(0, 80, 0, 80)
-    aimTouch.Position = UDim2.new(1, -100, 0.5, -40)
-    aimTouch.BackgroundColor3 = Color3.fromRGB(168,85,247)
-    aimTouch.BackgroundTransparency = 0.7
-    aimTouch.Text = "瞄准"
-    aimTouch.TextColor3 = Color3.new(1,1,1)
-    aimTouch.Font = Enum.Font.GothamBold; aimTouch.TextSize = 14
-    aimTouch.BorderSizePixel = 0
-    aimTouch.ZIndex = 40
-    Instance.new("UICorner", aimTouch).CornerRadius = UDim.new(1, 0)
-    aimTouch.MouseButton1Down:Connect(function() S.aimbot.keyHeld = true end)
-    aimTouch.MouseButton1Up:Connect(function() S.aimbot.keyHeld = false end)
-    aimTouch.TouchLongPress:Connect(function() S.aimbot.keyHeld = true end)
-    aimTouch.TouchEnded:Connect(function() S.aimbot.keyHeld = false end)
+-- 移动端瞄准按钮
+if Exec.isMobile then
+    local aimBtn = Instance.new("TextButton", screen)
+    aimBtn.Size = UDim2.new(0, 70, 0, 70)
+    aimBtn.Position = UDim2.new(1, -85, 0.5, -35)
+    aimBtn.BackgroundColor3 = Color3.fromRGB(168,85,247)
+    aimBtn.BackgroundTransparency = 0.6
+    aimBtn.Text = "瞄准"
+    aimBtn.TextColor3 = Color3.new(1,1,1)
+    aimBtn.Font = Enum.Font.GothamBold; aimBtn.TextSize = 13
+    aimBtn.BorderSizePixel = 0
+    aimBtn.ZIndex = 40
+    aimBtn.Visible = false  -- 默认隐藏, 用户开启自瞄后显示
+    Instance.new("UICorner", aimBtn).CornerRadius = UDim.new(1, 0)
+
+    -- 当自瞄开启时显示按钮
+    task.spawn(function()
+        while screen.Parent do
+            pcall(function() aimBtn.Visible = S.aimbot.enabled end)
+            task.wait(0.5)
+        end
+    end)
+
+    aimBtn.MouseButton1Down:Connect(function() S.aimbot.keyHeld = true end)
+    aimBtn.MouseButton1Up:Connect(function() S.aimbot.keyHeld = false end)
+    aimBtn.TouchLongPress:Connect(function() S.aimbot.keyHeld = true end)
+    aimBtn.TouchEnded:Connect(function() S.aimbot.keyHeld = false end)
 end
 
--- ========== 加载动画 ==========
+-- ============================================================
+-- 加载动画 (简化)
+-- ============================================================
 local loading = Instance.new("Frame", screen)
 loading.Size = UDim2.new(1, 0, 1, 0)
 loading.BackgroundColor3 = Color3.fromRGB(0,0,0)
 loading.BackgroundTransparency = 0.4
 loading.BorderSizePixel = 0; loading.ZIndex = 100
+
 local lCard = Instance.new("Frame", loading)
-lCard.Size = UDim2.new(0, 250, 0, 130)
-lCard.Position = UDim2.new(0.5, -125*uiScale, 0.5, -65*uiScale)
+lCard.Size = UDim2.new(0, 220, 0, 110)
+lCard.Position = UDim2.new(0.5, -110*uiScale, 0.5, -55*uiScale)
 lCard.BackgroundColor3 = Color3.fromRGB(18,18,26)
 lCard.BackgroundTransparency = 0.05; lCard.BorderSizePixel = 0; lCard.ZIndex = 101
 Instance.new("UICorner", lCard).CornerRadius = UDim.new(0, 12)
 Instance.new("UIScale", lCard).Scale = uiScale
 Instance.new("UIStroke", lCard).Color = Color3.fromRGB(168,85,247)
+
 local lLogo = Instance.new("Frame", lCard)
-lLogo.Size = UDim2.new(0, 44, 0, 44); lLogo.Position = UDim2.new(0.5, -22, 0, 12)
+lLogo.Size = UDim2.new(0, 40, 0, 40); lLogo.Position = UDim2.new(0.5, -20, 0, 10)
 lLogo.BackgroundColor3 = Color3.fromRGB(168,85,247)
 lLogo.BorderSizePixel = 0; lLogo.ZIndex = 102
-Instance.new("UICorner", lLogo).CornerRadius = UDim.new(0, 11)
+Instance.new("UICorner", lLogo).CornerRadius = UDim.new(0, 10)
 local lLT = Instance.new("TextLabel", lLogo)
 lLT.Size = UDim2.new(1,0,1,0); lLT.BackgroundTransparency = 1
 lLT.Text = "嘉"; lLT.TextColor3 = Color3.new(1,1,1)
-lLT.Font = Enum.Font.GothamBlack; lLT.TextSize = 22; lLT.ZIndex = 103
+lLT.Font = Enum.Font.GothamBlack; lLT.TextSize = 20; lLT.ZIndex = 103
+
 local lTitle = Instance.new("TextLabel", lCard)
-lTitle.Size = UDim2.new(1, 0, 0, 14); lTitle.Position = UDim2.new(0, 0, 0, 62)
-lTitle.BackgroundTransparency = 1; lTitle.Text = "XJ HUB 1.5"
+lTitle.Size = UDim2.new(1, 0, 0, 14); lTitle.Position = UDim2.new(0, 0, 0, 56)
+lTitle.BackgroundTransparency = 1; lTitle.Text = "XJ HUB 1.6"
 lTitle.TextColor3 = Color3.new(1,1,1); lTitle.Font = Enum.Font.GothamBold
 lTitle.TextSize = 12; lTitle.ZIndex = 102
+
 local lBarBg = Instance.new("Frame", lCard)
-lBarBg.Size = UDim2.new(1, -36, 0, 4); lBarBg.Position = UDim2.new(0, 18, 0, 86)
+lBarBg.Size = UDim2.new(1, -30, 0, 4); lBarBg.Position = UDim2.new(0, 15, 0, 76)
 lBarBg.BackgroundColor3 = Color3.fromRGB(40,40,55); lBarBg.BorderSizePixel = 0; lBarBg.ZIndex = 102
 Instance.new("UICorner", lBarBg).CornerRadius = UDim.new(1, 0)
+
 local lBarFill = Instance.new("Frame", lBarBg)
 lBarFill.Size = UDim2.new(0, 0, 1, 0)
 lBarFill.BackgroundColor3 = Color3.fromRGB(168,85,247)
 lBarFill.BorderSizePixel = 0; lBarFill.ZIndex = 103
 Instance.new("UICorner", lBarFill).CornerRadius = UDim.new(1, 0)
+
 local lStatus = Instance.new("TextLabel", lCard)
-lStatus.Size = UDim2.new(1, -36, 0, 14); lStatus.Position = UDim2.new(0, 18, 0, 98)
+lStatus.Size = UDim2.new(1, -30, 0, 12); lStatus.Position = UDim2.new(0, 15, 0, 88)
 lStatus.BackgroundTransparency = 1; lStatus.Text = "初始化..."
 lStatus.TextColor3 = Color3.fromRGB(200,200,220)
 lStatus.Font = Enum.Font.GothamMedium; lStatus.TextSize = 9
 lStatus.TextXAlignment = Enum.TextXAlignment.Left; lStatus.ZIndex = 102
 
 task.spawn(function()
-    lStatus.Text = "适配 "..exeName.."..."
-    Tween:Create(lBarFill, TweenInfo.new(0.4, Enum.EasingStyle.Quint), { Size = UDim2.new(0.4,0,1,0) }):Play()
-    task.wait(0.4)
-    lStatus.Text = "加载模块..."
-    Tween:Create(lBarFill, TweenInfo.new(0.4, Enum.EasingStyle.Quint), { Size = UDim2.new(0.8,0,1,0) }):Play()
-    task.wait(0.35)
-    lStatus.Text = "启动完成"
-    Tween:Create(lBarFill, TweenInfo.new(0.3, Enum.EasingStyle.Quint), { Size = UDim2.new(1,0,1,0) }):Play()
-    task.wait(0.3)
-    Tween:Create(loading, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
-    Tween:Create(lCard, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
-    for _, d in ipairs(lCard:GetDescendants()) do
-        if d:IsA("TextLabel") then
-            Tween:Create(d, TweenInfo.new(0.25), { TextTransparency = 1 }):Play()
+    pcall(function()
+        lStatus.Text = "适配 "..Exec.name.."..."
+        Tween:Create(lBarFill, TweenInfo.new(0.4, Enum.EasingStyle.Quint), { Size = UDim2.new(0.5,0,1,0) }):Play()
+        task.wait(0.4)
+        lStatus.Text = "加载模块..."
+        Tween:Create(lBarFill, TweenInfo.new(0.4, Enum.EasingStyle.Quint), { Size = UDim2.new(1,0,1,0) }):Play()
+        task.wait(0.4)
+        Tween:Create(loading, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
+        Tween:Create(lCard, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
+        for _, d in ipairs(lCard:GetDescendants()) do
+            if d:IsA("TextLabel") then
+                Tween:Create(d, TweenInfo.new(0.25), { TextTransparency = 1 }):Play()
+            end
         end
-    end
-    task.wait(0.35)
-    loading:Destroy()
-    main.Visible = true
-    main.Size = UDim2.new(0, 80, 0, 60)
-    Tween:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, W, 0, H),
-    }):Play()
-    task.wait(0.6)
-    notify("XJ Hub", "v1.5 加载完成 · "..exeName, "success", 3)
+        task.wait(0.35)
+        loading:Destroy()
+        main.Visible = true
+    end)
+    task.wait(0.5)
+    notify("XJ Hub", "v1.6 加载完成", "success", 2.5)
     pcall(runTests)
 end)
 
-ok("UI 构建完成")
-inf("========== XJ Hub v1.5 启动完毕 ==========")
+log("v1.6 启动完成")
