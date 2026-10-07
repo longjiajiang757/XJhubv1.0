@@ -18,7 +18,7 @@ local LP      = Players.LocalPlayer
 local CFG = {
     USER_ID     = "jiajiangovo0829",
     APP_NAME    = "a",
-    SIGN_KEY    = "ZZNV3HQ4TR",   -- ⚠️ 必须改！从卡密通后台复制
+    SIGN_KEY    = "3d881bede8893291935c0e61fc3ad633",   -- ⚠️ 必须改！从卡密通后台复制
     
     API_BASE    = "https://www.keyt.cn/kami/jiajiangovo0829/check.php",
     TS_DIFF     = 120,
